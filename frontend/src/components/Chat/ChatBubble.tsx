@@ -52,7 +52,7 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({
 
       {/* Bubble Panel */}
       <div
-        className={`max-w-[85%] rounded-2xl px-4 py-3 text-xs leading-relaxed shadow-sm ${
+        className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm ${
           isUser
             ? "bg-accent text-white rounded-tr-none font-semibold text-left"
             : isBlocked
@@ -63,7 +63,7 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({
         {/* Header information */}
         <div className="flex items-center justify-between mb-1.5 opacity-80 gap-2">
           <div className="flex items-center gap-1.5 min-w-0">
-            <span className="text-[8.5px] font-bold uppercase tracking-wider flex-shrink-0 text-accent">
+            <span className="text-[10px] font-bold uppercase tracking-wider flex-shrink-0 text-accent">
               {isUser ? "You" : "Lapis Analyst"}
             </span>
           </div>
@@ -80,7 +80,7 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({
                 {isSpeaking ? <Square className="w-3 h-3 fill-current" /> : <Volume2 className="w-3 h-3" />}
               </button>
             )}
-            <span className="text-[7.5px] font-mono">
+            <span className="text-[9px] font-mono">
               {new Date(message.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
             </span>
           </div>
@@ -94,7 +94,7 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({
           <button
             type="button"
             onClick={() => onCompare(message.text)}
-            className="mt-1.5 flex items-center gap-1 text-[8.5px] font-bold uppercase tracking-wide text-white/80 hover:text-white transition-colors cursor-pointer"
+            className="mt-1.5 flex items-center gap-1 text-[10px] font-bold uppercase tracking-wide text-white/80 hover:text-white transition-colors cursor-pointer"
           >
             <Scale className="w-3 h-3" />
             Compare Both Models
@@ -103,7 +103,7 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({
 
         {/* Guardrail badge indicator */}
         {isBlocked && (
-          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-danger/10 border border-danger/30 text-danger text-[10px] font-bold rounded-lg mt-2 font-sans animate-pulse">
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-danger/10 border border-danger/30 text-danger text-xs font-bold rounded-lg mt-2 font-sans animate-pulse">
             <ShieldAlert className="w-3.5 h-3.5" />
             Blocked Status: Read-Only Guardrail Triggered
           </div>
@@ -119,7 +119,7 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({
                 : "bg-success/10 border-success/20 text-success"
             }`}
           >
-            <div className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wide">
+            <div className="flex items-center gap-1.5 text-xs font-extrabold uppercase tracking-wide">
               {message.status === "Failed" ? (
                 <>
                   <AlertCircle className="w-3.5 h-3.5" />
@@ -132,7 +132,7 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({
                 </>
               )}
             </div>
-            <span className="text-[10px] font-mono opacity-90 block">{message.message}</span>
+            <span className="text-xs font-mono opacity-90 block">{message.message}</span>
           </div>
         )}
 
@@ -145,7 +145,7 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({
             populated for admin-generated write proposals. */}
         {!isUser && message.pendingConfirmation && (
           <div className="p-3 border border-warning/25 bg-warning/10 rounded-lg space-y-2 font-sans">
-            <div className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wide text-warning">
+            <div className="flex items-center gap-1.5 text-xs font-extrabold uppercase tracking-wide text-warning">
               <AlertCircle className="w-3.5 h-3.5" />
               {message.pendingConfirmation.resolved === "confirmed"
                 ? "Write executed"
@@ -155,7 +155,7 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({
               <button
                 type="button"
                 onClick={() => onConfirmWrite(message.id, message.pendingConfirmation!.token)}
-                className="px-3 py-1.5 bg-warning hover:opacity-90 text-bg text-[10px] font-extrabold uppercase tracking-wide rounded-lg transition-all cursor-pointer"
+                className="px-3 py-1.5 bg-warning hover:opacity-90 text-bg text-xs font-extrabold uppercase tracking-wide rounded-lg transition-all cursor-pointer"
               >
                 Confirm &amp; Execute
               </button>
@@ -171,7 +171,7 @@ export const ChatBubble: React.FC<ChatBubbleProps> = ({
         {/* Auto charts visual representation */}
         {!isUser && message.chartData && (
           <div ref={chartContainerRef} className="space-y-1 pt-1">
-            <span className="text-[8px] font-extrabold uppercase text-text-muted tracking-wider font-mono">
+            <span className="text-[10px] font-extrabold uppercase text-text-muted tracking-wider font-mono">
               Auto-Generated {message.chartData.type} view
             </span>
             {message.chartData.type === "bar" && (

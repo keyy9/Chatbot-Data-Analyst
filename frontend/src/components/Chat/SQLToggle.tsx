@@ -22,23 +22,23 @@ export const SQLToggle: React.FC<SQLToggleProps> = ({ sql, executionTimeMs, rowC
     <div className="border border-slate-200 dark:border-border rounded-xl overflow-hidden bg-slate-50 dark:bg-slate-950/60 shadow-inner w-full">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full flex items-center justify-between px-4 py-2 text-[10px] font-bold text-text-faint dark:text-text-muted hover:text-slate-800 dark:hover:text-text transition-colors uppercase tracking-wider bg-slate-100/60 dark:bg-slate-950/40 cursor-pointer"
+        className="w-full flex items-center justify-between px-4 py-2 text-xs font-bold text-text-faint dark:text-text-muted hover:text-slate-800 dark:hover:text-text transition-colors uppercase tracking-wider bg-slate-100/60 dark:bg-slate-950/40 cursor-pointer"
       >
         <span className="flex items-center gap-1.5 font-mono">
           <Database className="w-3.5 h-3.5 text-teal" />
           {isOpen ? "Hide SQL Statement" : "Show Generated SQL"}
         </span>
-        <span className="text-[9px] font-sans font-normal opacity-70">
+        <span className="text-[10px] font-sans font-normal opacity-70">
           {isOpen ? "Click to collapse" : "Click to expand"}
         </span>
       </button>
       {isOpen && (
         <div className="p-3 border-t border-slate-200 dark:border-border space-y-2 text-left">
-          <div className="flex justify-between items-center text-[10px] text-text-faint font-mono">
+          <div className="flex justify-between items-center text-xs text-text-faint font-mono">
             <span>
               SQL Dialect: SQLite
-              {typeof executionTimeMs === "number" && ` · ${executionTimeMs.toFixed(0)}ms`}
-              {typeof rowCount === "number" && ` · ${rowCount} row${rowCount === 1 ? "" : "s"}`}
+              {typeof executionTimeMs === "number" && ` Â· ${executionTimeMs.toFixed(0)}ms`}
+              {typeof rowCount === "number" && ` Â· ${rowCount} row${rowCount === 1 ? "" : "s"}`}
             </span>
             <button
               onClick={handleCopy}
@@ -57,7 +57,7 @@ export const SQLToggle: React.FC<SQLToggleProps> = ({ sql, executionTimeMs, rowC
               )}
             </button>
           </div>
-          <pre className="bg-white dark:bg-surface p-3 rounded-lg font-mono text-[10px] text-slate-700 dark:text-text-muted overflow-x-auto border border-slate-100 dark:border-slate-900 leading-normal">
+          <pre className="bg-white dark:bg-surface p-3 rounded-lg font-mono text-xs text-slate-700 dark:text-text-muted overflow-x-auto border border-slate-100 dark:border-slate-900 leading-normal">
             <code>{sql}</code>
           </pre>
         </div>
