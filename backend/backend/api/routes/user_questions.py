@@ -473,3 +473,149 @@ async def delete_user_note(note_id: str, user_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+class CreateSessionRequest(BaseModel):
+    id: str
+    user_id: str
+    title: str
+
+
+class RenameSessionRequest(BaseModel):
+    id: str
+    user_id: str
+    title: str
+
+
+@router.get("/sessions")
+async def get_user_sessions(user_id: str):
+    """Retrieve all chat sessions for a user (Client/Admin)."""
+    app_client = get_app_db_client()
+    try:
+        rows, _, _ = app_client.execute_read(
+            "SELECT id, title, created_at as \"createdAt\" "
+            "FROM chat_sessions WHERE user_id = %s ORDER BY created_at DESC",
+            (user_id,)
+        )
+        return {"sessions": [{**row, "id": str(row["id"]), "createdAt": int(row["createdAt"].timestamp() * 1000)} for row in rows]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+@router.post("/sessions")
+async def create_user_session(request: CreateSessionRequest):
+    """Register or save a new chat session in the database."""
+    app_client = get_app_db_client()
+    try:
+        app_client.execute_write(
+            "INSERT INTO chat_sessions (id, user_id, title) VALUES (%s, %s, %s) "
+            "ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title RETURNING id",
+            (request.id, request.user_id, request.title)
+        )
+        return {"status": "success", "session_id": request.id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+@router.post("/sessions/rename")
+async def rename_user_session(request: RenameSessionRequest):
+    """Rename an existing chat session."""
+    app_client = get_app_db_client()
+    try:
+        rows, count, _ = app_client.execute_write(
+            "UPDATE chat_sessions SET title = %s WHERE id = %s AND user_id = %s RETURNING id",
+            (request.title, request.id, request.user_id)
+        )
+        if count == 0:
+            raise HTTPException(status_code=404, detail="Session not found or does not belong to you")
+        return {"status": "success"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_user_session(session_id: str, user_id: str):
+    """Delete a chat session and all its messages."""
+    app_client = get_app_db_client()
+    try:
+        # First delete messages
+        app_client.execute_write(
+            "DELETE FROM chat_messages WHERE session_id = %s",
+            (session_id,)
+        )
+        rows, count, _ = app_client.execute_write(
+            "DELETE FROM chat_sessions WHERE id = %s AND user_id = %s RETURNING id",
+            (session_id, user_id)
+        )
+        if count == 0:
+            raise HTTPException(status_code=404, detail="Session not found or does not belong to you")
+        return {"status": "success"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+@router.get("/sessions/{session_id}/messages")
+async def get_session_messages(session_id: str, user_id: str):
+    """Retrieve formatted message history for a chat session."""
+    import json
+    app_client = get_app_db_client()
+    
+    # Verify session ownership
+    sess_check, _, _ = app_client.execute_read(
+        "SELECT id FROM chat_sessions WHERE id = %s AND user_id = %s",
+        (session_id, user_id)
+    )
+    if not sess_check:
+        raise HTTPException(status_code=404, detail="Session not found or does not belong to you")
+
+    try:
+        rows, _, _ = app_client.execute_read(
+            "SELECT id, role, content as text, sql_generated as sql, result_json, chart_type, needs_clarification, created_at as timestamp "
+            "FROM chat_messages WHERE session_id = %s ORDER BY created_at ASC",
+            (session_id,)
+        )
+        
+        formatted = []
+        for r in rows:
+            res_json = r.get("result_json")
+            if isinstance(res_json, str):
+                try:
+                    res_json = json.loads(res_json)
+                except:
+                    res_json = None
+            
+            # Format preview if rows exist
+            result_preview = None
+            if res_json and isinstance(res_json, list) and len(res_json) > 0:
+                cols = list(res_json[0].keys()) if isinstance(res_json[0], dict) else []
+                result_preview = {"columns": cols, "rows": res_json}
+            
+            # Setup chartData if type is specified
+            chart_data = None
+            if r.get("chart_type") and res_json:
+                chart_data = {"type": r["chart_type"], "data": res_json}
+
+            status = "Success"
+            if r["role"] == "assistant" and not r["sql"] and not r["needs_clarification"] and "error" in r["text"].lower():
+                status = "Failed"
+
+            formatted.append({
+                "id": str(r["id"]),
+                "sender": "user" if r["role"] == "user" else "ai",
+                "text": r["text"],
+                "timestamp": int(r["timestamp"].timestamp() * 1000),
+                "status": status,
+                "sql": r["sql"],
+                "isClarification": r["needs_clarification"],
+                "clarificationOptions": res_json if r["needs_clarification"] else None,
+                "resultPreview": result_preview,
+                "chartData": chart_data
+            })
+            
+        return {"messages": formatted}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")

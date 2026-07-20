@@ -185,7 +185,19 @@ export const userApi = {
   askCompare: (question: string, user_id: string, session_id: string) =>
     request<CompareResponse>("/api/user/ask/compare", { question, user_id, session_id }),
   getMyQueryLogs: (user_id: string) =>
-    requestGet<{ logs: QueryLog[] }>("/api/user/query-logs", { user_id })
+    requestGet<{ logs: QueryLog[] }>("/api/user/query-logs", { user_id }),
+
+  // DB-persisted chat sessions & messages
+  getSessions: (user_id: string) =>
+    requestGet<{ sessions: { id: string; title: string; createdAt: number }[] }>("/api/user/sessions", { user_id }),
+  createSession: (user_id: string, id: string, title: string) =>
+    request<{ status: string; session_id: string }>("/api/user/sessions", { user_id, id, title }),
+  renameSession: (user_id: string, id: string, title: string) =>
+    request<{ status: string }>("/api/user/sessions/rename", { user_id, id, title }),
+  deleteSession: (user_id: string, session_id: string) =>
+    request<{ status: string }>(`/api/user/sessions/${session_id}`, { user_id }, "DELETE"),
+  getSessionMessages: (user_id: string, session_id: string) =>
+    requestGet<{ messages: any[] }>(`/api/user/sessions/${session_id}/messages`, { user_id })
 };
 
 // ============ Admin chat (read + propose/confirm writes) ============

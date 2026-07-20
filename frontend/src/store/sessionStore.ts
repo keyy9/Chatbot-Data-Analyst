@@ -1,5 +1,7 @@
 import { create } from "zustand";
 import type { ChatSession } from "../types";
+import { userApi } from "../lib/apiClient";
+import { useAuthStore } from "./authStore";
 
 interface SessionState {
   sessions: ChatSession[];
@@ -50,6 +52,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return { sessions: updated, activeSessionId: newSessionId };
     });
 
+    const userId = useAuthStore.getState().user?.userId;
+    if (userId) {
+      userApi.createSession(userId, newSessionId, finalTitle).catch((e) => console.error("Failed to save session to db:", e));
+    }
+
     return newSessionId;
   },
 
@@ -63,28 +70,38 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       }
       return { sessions: filtered, activeSessionId: nextActive };
     });
+
+    const userId = useAuthStore.getState().user?.userId;
+    if (userId) {
+      userApi.deleteSession(userId, id).catch((e) => console.error("Failed to delete session from db:", e));
+    }
   },
 
   renameSession: (id, newTitle) => {
-    set((state) => {
-      let finalTitle = newTitle.trim();
-      let counter = 1;
-      let checkTitle = finalTitle;
-      const existingTitles = new Set(
-        state.sessions.filter(s => s.id !== id).map(s => s.title.trim().toLowerCase())
-      );
-      while (existingTitles.has(checkTitle.toLowerCase())) {
-        checkTitle = `${finalTitle} (${counter})`;
-        counter++;
-      }
-      finalTitle = checkTitle;
+    let finalTitle = newTitle.trim();
+    let counter = 1;
+    let checkTitle = finalTitle;
+    const existingTitles = new Set(
+      get().sessions.filter(s => s.id !== id).map(s => s.title.trim().toLowerCase())
+    );
+    while (existingTitles.has(checkTitle.toLowerCase())) {
+      checkTitle = `${finalTitle} (${counter})`;
+      counter++;
+    }
+    finalTitle = checkTitle;
 
+    set((state) => {
       const updated = state.sessions.map((s) =>
         s.id === id ? { ...s, title: finalTitle } : s
       );
       localStorage.setItem("user_chat_sessions", JSON.stringify(updated));
       return { sessions: updated };
     });
+
+    const userId = useAuthStore.getState().user?.userId;
+    if (userId) {
+      userApi.renameSession(userId, id, finalTitle).catch((e) => console.error("Failed to rename session in db:", e));
+    }
   },
 
   setActiveSessionId: (id) => {
@@ -96,6 +113,40 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   initializeSessions: () => {
+    const userId = useAuthStore.getState().user?.userId;
+    if (userId) {
+      userApi.getSessions(userId)
+        .then((res) => {
+          if (res.sessions && res.sessions.length > 0) {
+            set({
+              sessions: res.sessions,
+              activeSessionId: get().activeSessionId || res.sessions[0].id
+            });
+            localStorage.setItem("user_chat_sessions", JSON.stringify(res.sessions));
+          } else {
+            // Create initial welcome session in db if empty
+            const initialSessId = crypto.randomUUID();
+            const initialSess: ChatSession = {
+              id: initialSessId,
+              title: "Retail Sales Overview",
+              createdAt: Date.now()
+            };
+            set({ sessions: [initialSess], activeSessionId: initialSessId });
+            localStorage.setItem("user_chat_sessions", JSON.stringify([initialSess]));
+            userApi.createSession(userId, initialSessId, "Retail Sales Overview").catch((err) => console.error("Failed to create default session:", err));
+          }
+        })
+        .catch((e) => {
+          console.error("Failed to load sessions from db:", e);
+          const saved = localStorage.getItem("user_chat_sessions");
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            set({ sessions: parsed, activeSessionId: parsed.length > 0 ? parsed[0].id : null });
+          }
+        });
+      return;
+    }
+
     const saved = localStorage.getItem("user_chat_sessions");
     if (saved) {
       const parsed: ChatSession[] = JSON.parse(saved);

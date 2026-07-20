@@ -90,6 +90,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     localStorage.removeItem("user_session");
     sessionStorage.removeItem("user_session");
     localStorage.removeItem("admin_authenticated");
+    localStorage.removeItem("user_notes");
+    localStorage.removeItem("user_chat_sessions");
+    localStorage.removeItem("user_chat_messages");
   },
 
   initialize: () => {

@@ -18,7 +18,7 @@ import type { CompareResponse } from "../lib/apiClient";
 export const ChatPage: React.FC = () => {
   const { theme, setTheme, initializeUi } = useUiStore();
   const { activeSessionId, initializeSessions, sessions } = useSessionStore();
-  const { messagesBySession, isLoading, submitClarificationAnswer, compareQuestion, initializeChat } = useChatStore();
+  const { messagesBySession, isLoading, submitClarificationAnswer, compareQuestion, initializeChat, fetchSessionMessages } = useChatStore();
   const { initializeNotes } = useNoteStore();
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -47,6 +47,12 @@ export const ChatPage: React.FC = () => {
     initializeNotes();
     initializeChat();
   }, [initializeUi, initializeSessions, initializeNotes, initializeChat]);
+
+  useEffect(() => {
+    if (activeSessionId) {
+      fetchSessionMessages(activeSessionId);
+    }
+  }, [activeSessionId, fetchSessionMessages]);
 
   const activeMessages = activeSessionId ? (messagesBySession[activeSessionId] || []) : [];
 

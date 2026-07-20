@@ -16,6 +16,7 @@ interface ChatState {
   submitClarificationAnswer: (sessionId: string, chosenOption: string) => Promise<void>;
   compareQuestion: (sessionId: string, questionText: string) => Promise<CompareResponse | null>;
   initializeChat: () => void;
+  fetchSessionMessages: (sessionId: string) => Promise<void>;
 }
 
 function appendMessage(
@@ -205,6 +206,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
       } catch (e) {
         console.error("Failed to parse saved chat messages", e);
       }
+    }
+  },
+
+  fetchSessionMessages: async (sessionId) => {
+    const userId = useAuthStore.getState().user?.userId;
+    if (!userId || !sessionId) return;
+
+    try {
+      const res = await userApi.getSessionMessages(userId, sessionId);
+      if (res.messages) {
+        set((state) => {
+          const updated = {
+            ...state.messagesBySession,
+            [sessionId]: res.messages
+          };
+          localStorage.setItem("user_chat_messages", JSON.stringify(updated));
+          return { messagesBySession: updated };
+        });
+      }
+    } catch (e) {
+      console.error("Failed to load messages from db for session:", sessionId, e);
     }
   }
 }));
