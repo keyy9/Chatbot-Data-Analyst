@@ -146,7 +146,7 @@ export const AdminChat: React.FC<AdminChatProps> = ({
 
       {/* Suggestions list */}
       <div className="p-4 border-t border-border bg-surface-2/35 space-y-1.5 font-sans">
-        <span className="text-[8px] font-bold text-text-muted uppercase tracking-widest block font-mono">
+        <span className="text-[10px] font-bold text-text-muted uppercase tracking-widest block font-mono">
           Suggested Operations
         </span>
         <div className="flex flex-wrap gap-1.5">
@@ -176,7 +176,7 @@ export const AdminChat: React.FC<AdminChatProps> = ({
               type="button"
               key={idx}
               onClick={() => setChatInput(sug.cmd)}
-              className="bg-surface-2 hover:bg-surface-hover border border-border text-text-muted hover:text-text px-2.5 py-1 rounded-full text-[10px] font-bold transition-all cursor-pointer shadow-sm"
+              className="bg-surface-2 hover:bg-surface-hover border border-border text-text-muted hover:text-text px-3 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer shadow-sm"
             >
               <span className="text-accent font-extrabold mr-1">
                 {sug.label.split(":")[0]}:
@@ -215,7 +215,7 @@ export const AdminChat: React.FC<AdminChatProps> = ({
           placeholder="Type an administrative operation or query (e.g. Delete cancelled orders)..."
           value={chatInput}
           onChange={(e) => setChatInput(e.target.value)}
-          className="flex-1 bg-surface-2 border border-border text-text placeholder:text-text-faint px-4 py-2.5 rounded-full text-xs focus:ring-2 focus:ring-accent/40 focus:border-accent focus:outline-none font-bold"
+          className="flex-1 bg-surface-2 border border-border text-text placeholder:text-text-faint px-5 py-3 rounded-full text-sm focus:ring-2 focus:ring-accent/40 focus:border-accent focus:outline-none font-bold"
           required
         />
         <button
@@ -223,7 +223,7 @@ export const AdminChat: React.FC<AdminChatProps> = ({
           onClick={handleMicClick}
           disabled={!micSupported}
           title={micSupported ? "Voice input" : "Voice input unavailable in this browser"}
-          className={`p-2.5 rounded-full transition-all cursor-pointer flex items-center justify-center flex-shrink-0 disabled:cursor-not-allowed disabled:opacity-40 ${
+          className={`p-3 rounded-full transition-all cursor-pointer flex items-center justify-center flex-shrink-0 disabled:cursor-not-allowed disabled:opacity-40 ${
             isListening
               ? "bg-accent text-white animate-pulse"
               : "bg-surface-2 hover:bg-surface-hover text-text-muted hover:text-accent"
@@ -234,7 +234,7 @@ export const AdminChat: React.FC<AdminChatProps> = ({
         <button
           type="submit"
           disabled={isChatLoading}
-          className="bg-accent hover:bg-accent-hover text-white font-bold px-5 py-2.5 rounded-full text-xs transition-all shadow-sm flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer active:scale-95"
+          className="bg-accent hover:bg-accent-hover text-white font-bold px-6 py-3 rounded-full text-sm transition-all shadow-sm flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer active:scale-95"
         >
           <Send className="w-4 h-4" />
           Send
