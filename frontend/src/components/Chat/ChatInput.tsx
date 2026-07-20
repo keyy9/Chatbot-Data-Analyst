@@ -111,10 +111,10 @@ export const ChatInput: React.FC = () => {
           value={text}
           onChange={(e) => setText(e.target.value)}
           disabled={isLoading || !activeSessionId}
-          className="flex-1 bg-surface-2 border border-border text-text placeholder:text-text-faint pl-4 pr-24 py-3.5 rounded-full text-xs focus:ring-2 focus:ring-accent/40 focus:border-accent focus:outline-none transition-all shadow-sm font-semibold"
+          className="flex-1 bg-surface-2 border border-border text-text placeholder:text-text-faint pl-5 pr-28 py-4.5 rounded-full text-sm focus:ring-2 focus:ring-accent/40 focus:border-accent focus:outline-none transition-all shadow-sm font-semibold py-[17px]"
         />
 
-        <div className="absolute right-2 flex items-center gap-1.5">
+        <div className="absolute right-3 flex items-center gap-2">
           <button
             type="button"
             onClick={handleMicClick}
@@ -129,11 +129,11 @@ export const ChatInput: React.FC = () => {
             title={micSupported ? "Voice input" : "Voice input unavailable in this browser"}
           >
             {isListening ? (
-              <Square className="w-3.5 h-3.5 fill-current" />
+              <Square className="w-4 h-4 fill-current" />
             ) : !micSupported ? (
-              <MicOff className="w-3.5 h-3.5" />
+              <MicOff className="w-4 h-4" />
             ) : (
-              <Mic className="w-3.5 h-3.5" />
+              <Mic className="w-4 h-4" />
             )}
           </button>
 
@@ -142,7 +142,7 @@ export const ChatInput: React.FC = () => {
             disabled={!text.trim() || isLoading || !activeSessionId}
             className="p-2.5 bg-accent hover:bg-accent-hover disabled:opacity-30 disabled:cursor-not-allowed text-white rounded-full shadow-sm transition-all flex items-center justify-center cursor-pointer active:scale-95"
           >
-            <Send className="w-3.5 h-3.5" />
+            <Send className="w-4 h-4" />
           </button>
         </div>
       </form>

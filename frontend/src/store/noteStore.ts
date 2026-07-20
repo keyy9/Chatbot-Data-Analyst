@@ -1,5 +1,7 @@
 import { create } from "zustand";
 import type { Note } from "../types";
+import { notesApi } from "../lib/apiClient";
+import { useAuthStore } from "./authStore";
 
 interface NoteState {
   notes: Note[];
@@ -29,18 +31,32 @@ export const useNoteStore = create<NoteState>((set) => ({
       localStorage.setItem("user_notes", JSON.stringify(updated));
       return { notes: updated, selectedNoteId: newNote.id };
     });
+
+    const userId = useAuthStore.getState().user?.userId;
+    if (userId) {
+      notesApi.save(userId, newNote).catch((e) => console.error("Failed to save note to db:", e));
+    }
   },
 
   updateNote: (id, title, content, sessionId) => {
+    const updatedNote: Note = {
+      id,
+      title: title || "Untitled Note",
+      content,
+      sessionId,
+      lastModified: Date.now()
+    };
+
     set((state) => {
-      const updated = state.notes.map((n) =>
-        n.id === id
-          ? { ...n, title: title || "Untitled Note", content, sessionId, lastModified: Date.now() }
-          : n
-      );
+      const updated = state.notes.map((n) => (n.id === id ? updatedNote : n));
       localStorage.setItem("user_notes", JSON.stringify(updated));
       return { notes: updated };
     });
+
+    const userId = useAuthStore.getState().user?.userId;
+    if (userId) {
+      notesApi.save(userId, updatedNote).catch((e) => console.error("Failed to update note in db:", e));
+    }
   },
 
   deleteNote: (id) => {
@@ -53,6 +69,11 @@ export const useNoteStore = create<NoteState>((set) => ({
       }
       return { notes: filtered, selectedNoteId: nextSelected };
     });
+
+    const userId = useAuthStore.getState().user?.userId;
+    if (userId) {
+      notesApi.delete(userId, id).catch((e) => console.error("Failed to delete note from db:", e));
+    }
   },
 
   setSelectedNoteId: (id) => {
@@ -60,6 +81,32 @@ export const useNoteStore = create<NoteState>((set) => ({
   },
 
   initializeNotes: () => {
+    const userId = useAuthStore.getState().user?.userId;
+    if (userId) {
+      notesApi
+        .list(userId)
+        .then((res) => {
+          if (res.notes && res.notes.length > 0) {
+            set({ notes: res.notes, selectedNoteId: res.notes[0].id });
+            localStorage.setItem("user_notes", JSON.stringify(res.notes));
+          } else {
+            // Fallback if db is empty
+            const saved = localStorage.getItem("user_notes");
+            if (saved) {
+              set({ notes: JSON.parse(saved) });
+            }
+          }
+        })
+        .catch((e) => {
+          console.error("Failed to load notes from db:", e);
+          const saved = localStorage.getItem("user_notes");
+          if (saved) {
+            set({ notes: JSON.parse(saved) });
+          }
+        });
+      return;
+    }
+
     const saved = localStorage.getItem("user_notes");
     if (saved) {
       set({ notes: JSON.parse(saved) });

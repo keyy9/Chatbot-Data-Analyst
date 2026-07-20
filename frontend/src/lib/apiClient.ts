@@ -13,12 +13,12 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, body: unknown): Promise<T> {
+async function request<T>(path: string, body: unknown, method = "POST"): Promise<T> {
   let response: Response;
 
   try {
     response = await fetch(`${API_BASE_URL}${path}`, {
-      method: "POST",
+      method,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body)
     });
@@ -276,4 +276,30 @@ export interface AnalyticsSummary {
 export const analyticsApi = {
   getSummary: (user_id: string) =>
     requestGet<AnalyticsSummary>("/api/admin/analytics/summary", { user_id })
+};
+
+// ============ Saved Observation Notes (Supabase Persisted) ============
+
+export interface NoteApi {
+  id: string;
+  title: string;
+  content: string;
+  sessionId: string;
+  lastModified: number;
+}
+
+export const notesApi = {
+  list: (user_id: string) =>
+    requestGet<{ notes: NoteApi[] }>("/api/user/notes", { user_id }),
+  save: (user_id: string, note: NoteApi) =>
+    request<{ status: string; note_id: string }>("/api/user/notes", {
+      user_id,
+      id: note.id,
+      title: note.title,
+      content: note.content,
+      session_id: note.sessionId,
+      last_modified: note.lastModified
+    }),
+  delete: (user_id: string, note_id: string) =>
+    request<{ status: string; message: string }>(`/api/user/notes/${note_id}`, { user_id }, "DELETE")
 };

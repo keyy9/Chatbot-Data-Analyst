@@ -397,3 +397,79 @@ async def get_capabilities(user_id: str):
     access_control = get_access_control()
 
     return access_control.get_user_capabilities(user_context)
+
+
+class NoteRequest(BaseModel):
+    id: str
+    user_id: str
+    title: str
+    content: str
+    session_id: str | None = None
+    last_modified: int
+
+
+@router.get("/notes")
+async def get_user_notes(user_id: str):
+    """Retrieve all saved observations/notes for a user (Client/Admin)."""
+    app_client = get_app_db_client()
+    try:
+        rows, _, _ = app_client.execute_read(
+            "SELECT id, title, content, session_id as \"sessionId\", last_modified as \"lastModified\" "
+            "FROM user_notes WHERE user_id = %s ORDER BY last_modified DESC",
+            (user_id,)
+        )
+        return {"notes": rows}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+@router.post("/notes")
+async def save_user_note(request: NoteRequest):
+    """Upsert (Insert or Update) a user note/observation."""
+    app_client = get_app_db_client()
+    try:
+        # Check if user exists
+        user_check, _, _ = app_client.execute_read(
+            "SELECT id FROM users WHERE id = %s AND deleted_at IS NULL",
+            (request.user_id,)
+        )
+        if not user_check:
+            raise HTTPException(status_code=404, detail="User account not found")
+
+        # Perform Upsert using PostgreSQL INSERT ... ON CONFLICT
+        app_client.execute_write(
+            """
+            INSERT INTO user_notes (id, user_id, title, content, session_id, last_modified)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET
+                title = EXCLUDED.title,
+                content = EXCLUDED.content,
+                session_id = EXCLUDED.session_id,
+                last_modified = EXCLUDED.last_modified
+            RETURNING id
+            """,
+            (request.id, request.user_id, request.title, request.content, request.session_id, request.last_modified)
+        )
+        return {"status": "success", "note_id": request.id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+@router.delete("/notes/{note_id}")
+async def delete_user_note(note_id: str, user_id: str):
+    """Delete a user note/observation."""
+    app_client = get_app_db_client()
+    try:
+        rows, count, _ = app_client.execute_write(
+            "DELETE FROM user_notes WHERE id = %s AND user_id = %s RETURNING id",
+            (note_id, user_id)
+        )
+        if count == 0:
+            raise HTTPException(status_code=404, detail="Note not found or does not belong to you")
+        return {"status": "success", "message": "Note deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
