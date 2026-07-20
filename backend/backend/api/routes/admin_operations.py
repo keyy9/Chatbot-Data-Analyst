@@ -460,9 +460,16 @@ async def admin_ask(request: AdminAskRequest):
     )
     conversation_context = build_conversation_context(recent_messages, request.question)
 
+    is_follow_up = False
+    if recent_messages:
+        last = recent_messages[-1]
+        if last.get("role") == "assistant" and last.get("needs_clarification"):
+            is_follow_up = True
+
     sql_result = sql_generator.generate(
         effective_question,
         schema_definition,
+        check_ambiguity=not is_follow_up,
         override_system_prompt=ADMIN_WRITE_SYSTEM_PROMPT,
         conversation_context=conversation_context
     )

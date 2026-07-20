@@ -221,13 +221,20 @@ async def ask_question(request: QuestionRequest):
         sql_guard_rbac, query_executor, user_context, request.user_id, request.session_id, logger
     )
 
+    is_follow_up = False
+    if recent_messages:
+        last = recent_messages[-1]
+        if last.get("role") == "assistant" and last.get("needs_clarification"):
+            is_follow_up = True
+
     try:
         result = orchestrator.process(
             user_question=effective_question,
             schema_definition=schema_definition,
             query_executor_callback=execute_sql_callback,
             override_system_prompt=system_prompt_override,
-            conversation_context=conversation_context
+            conversation_context=conversation_context,
+            check_ambiguity=not is_follow_up
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

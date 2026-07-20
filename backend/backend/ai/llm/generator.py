@@ -524,7 +524,8 @@ class PipelineOrchestrator:
         schema_definition: str,
         query_executor_callback: Callable[[str], Tuple[list, list, float]],
         override_system_prompt: Optional[str] = None,
-        conversation_context: str = ""
+        conversation_context: str = "",
+        check_ambiguity: bool = True
     ) -> Dict[str, Any]:
         """
         Run the complete pipeline for a user question.
@@ -539,6 +540,7 @@ class PipelineOrchestrator:
             override_system_prompt: Optional admin-editable system prompt
                 (e.g. loaded from the `system_prompts` table) used in place
                 of the hardcoded default.
+            check_ambiguity: Whether to check for ambiguity.
 
         Returns:
             Dict: Pipeline response. On success:
@@ -557,6 +559,7 @@ class PipelineOrchestrator:
         sql_result = self.sql_generator.generate(
             user_question,
             schema_definition,
+            check_ambiguity=check_ambiguity,
             override_system_prompt=override_system_prompt,
             conversation_context=conversation_context
         )

@@ -447,14 +447,34 @@ Return a JSON object:
         
         Returns:
             str: A more specific, non-ambiguous question.
-            
-        Example:
-        original = "Show sales"
-        answer = "This month"
-        merged = manager.merge_clarification_with_question(original, answer)
-        # Returns: "Show sales for this month"
         """
-        # Simple merge - can be enhanced with more intelligent logic
+        ans_lower = clarification_answer.lower().strip()
+        orig_lower = original_question.lower().strip()
+
+        # Handle ENTITY_SELECTION clarification options
+        if "show me available options" in ans_lower or "all items" in ans_lower:
+            noun = orig_lower
+            if not noun.endswith('s') and noun in ['product', 'customer', 'order', 'category', 'item']:
+                noun = noun + 's'
+            return f"show all {noun}"
+        
+        if "most recent" in ans_lower:
+            noun = orig_lower
+            if not noun.endswith('s') and noun in ['product', 'customer', 'order', 'category', 'item']:
+                noun = noun + 's'
+            return f"show the most recent {noun}"
+            
+        if "highest value" in ans_lower:
+            noun = orig_lower
+            if not noun.endswith('s') and noun in ['product', 'customer', 'order', 'category', 'item']:
+                noun = noun + 's'
+            return f"show the {noun} with the highest price or value"
+
+        # Handle other types of generic "show me available..." responses
+        if "show me available" in ans_lower:
+            return f"list all available items for {orig_lower}"
+
+        # Standard merge
         return f"{original_question} for {clarification_answer.lower()}"
 
     def is_ambiguity_threshold_exceeded(
