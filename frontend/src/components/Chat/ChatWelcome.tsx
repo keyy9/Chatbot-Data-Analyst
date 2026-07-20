@@ -48,10 +48,10 @@ export const ChatWelcome: React.FC = () => {
 
       {/* Greeting text */}
       <div className="space-y-2">
-        <h2 className="text-xl font-extrabold text-text">
+        <h2 className="text-3xl font-extrabold text-text">
           Welcome, {profile.name}!
         </h2>
-        <p className="text-xs text-text-muted leading-relaxed max-w-md mx-auto">
+        <p className="text-sm text-text-muted leading-relaxed max-w-lg mx-auto">
           I am your natural language database assistant. Ask me questions about our products, customers, and sales orders, and I will compile safe read-only SQL reports.
         </p>
       </div>
@@ -62,16 +62,16 @@ export const ChatWelcome: React.FC = () => {
           <div
             key={idx}
             onClick={() => handleSuggestionClick(sug.text)}
-            className="p-4 bg-surface-2/45 border border-border rounded-2xl hover:border-accent/50 cursor-pointer shadow-sm hover:shadow-md transition-all text-left flex items-start gap-3.5 group hover:scale-[1.02] duration-200"
+            className="p-5 bg-surface-2/45 border border-border rounded-2xl hover:border-accent/50 cursor-pointer shadow-sm hover:shadow-md transition-all text-left flex items-start gap-4 group hover:scale-[1.02] duration-200"
           >
-            <div className="p-2 bg-surface-hover rounded-xl group-hover:bg-accent/10 transition-colors">
+            <div className="p-2.5 bg-surface-hover rounded-xl group-hover:bg-accent/10 transition-colors">
               {sug.icon}
             </div>
             <div>
-              <h4 className="text-xs font-bold text-text group-hover:text-accent transition-colors">
+              <h4 className="text-sm font-bold text-text group-hover:text-accent transition-colors leading-snug">
                 {sug.text}
               </h4>
-              <p className="text-[10px] text-text-faint mt-0.5 font-medium">
+              <p className="text-xs text-text-faint mt-1 font-medium leading-relaxed">
                 {sug.desc}
               </p>
             </div>

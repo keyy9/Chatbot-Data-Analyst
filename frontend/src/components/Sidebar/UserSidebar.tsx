@@ -57,7 +57,7 @@ export const UserSidebar: React.FC = () => {
   return (
     <aside
       className={`h-screen flex flex-col justify-between transition-all duration-300 border-r border-border bg-bg-elevated text-text z-30 ${
-        sidebarCollapsed ? "w-16" : "w-64"
+        sidebarCollapsed ? "w-16" : "w-72"
       }`}
     >
       <div>
@@ -127,7 +127,16 @@ export const UserSidebar: React.FC = () => {
       {/* Sidebar Footer buttons */}
       <div className="p-3 border-t border-border space-y-1.5">
         {/* Notes Toggle Shortcut */}
-        <button onClick={() => toggleNotesDrawer(true)} className={navItemClass()} title="Analytical observations">
+        <button
+          onClick={() => {
+            toggleNotesDrawer(true);
+            if (location.pathname !== "/chat") {
+              navigate("/chat");
+            }
+          }}
+          className={navItemClass()}
+          title="Analytical observations"
+        >
           <FileText className="w-4 h-4 text-accent" />
           {!sidebarCollapsed && <span>Saved Observations</span>}
         </button>

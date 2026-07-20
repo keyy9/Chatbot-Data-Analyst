@@ -38,7 +38,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <aside
       className={`flex flex-col justify-between transition-all duration-300 z-20 bg-bg-elevated border-r border-border text-text ${
-        sidebarCollapsed ? "w-16" : "w-64"
+        sidebarCollapsed ? "w-16" : "w-72"
       }`}
     >
       <div>

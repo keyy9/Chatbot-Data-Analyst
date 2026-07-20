@@ -6,7 +6,7 @@ import { authApi, ApiError, type AccountProfile } from "../lib/apiClient";
 import { UserSidebar } from "../components/Sidebar/UserSidebar";
 import { Button } from "../components/UI/Button";
 import { Input } from "../components/UI/Input";
-import { MyQueryHistoryPanel } from "../components/MyQueryHistoryPanel";
+
 import { Sparkles, Save, Calendar, Shield, Activity, User, Key, ShieldAlert } from "lucide-react";
 
 export const Profile: React.FC = () => {
@@ -292,8 +292,7 @@ export const Profile: React.FC = () => {
             </div>
           </div>
 
-          {/* Real, self-scoped query history - the user's own rows only */}
-          <MyQueryHistoryPanel />
+
         </div>
       </div>
     </div>
