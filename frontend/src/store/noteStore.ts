@@ -93,7 +93,12 @@ export const useNoteStore = create<NoteState>((set) => ({
             // Fallback if db is empty
             const saved = localStorage.getItem("user_notes");
             if (saved) {
-              set({ notes: JSON.parse(saved) });
+              const parsed = JSON.parse(saved);
+              set({ notes: parsed, selectedNoteId: parsed.length > 0 ? parsed[0].id : null });
+              // Automatically sync/upload local notes to the database
+              parsed.forEach((note: any) => {
+                notesApi.save(userId, note).catch((e) => console.error("Failed to sync note to db on init:", e));
+              });
             }
           }
         })

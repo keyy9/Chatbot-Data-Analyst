@@ -124,16 +124,28 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             });
             localStorage.setItem("user_chat_sessions", JSON.stringify(res.sessions));
           } else {
-            // Create initial welcome session in db if empty
-            const initialSessId = crypto.randomUUID();
-            const initialSess: ChatSession = {
-              id: initialSessId,
-              title: "Retail Sales Overview",
-              createdAt: Date.now()
-            };
-            set({ sessions: [initialSess], activeSessionId: initialSessId });
-            localStorage.setItem("user_chat_sessions", JSON.stringify([initialSess]));
-            userApi.createSession(userId, initialSessId, "Retail Sales Overview").catch((err) => console.error("Failed to create default session:", err));
+            // Fallback if db has no sessions but local storage has them
+            const saved = localStorage.getItem("user_chat_sessions");
+            if (saved) {
+              const parsed = JSON.parse(saved);
+              set({ sessions: parsed, activeSessionId: parsed.length > 0 ? parsed[0].id : null });
+              
+              // Upload them to DB!
+              parsed.forEach((sess: ChatSession) => {
+                userApi.createSession(userId, sess.id, sess.title).catch((e) => console.error("Failed to sync session to db on init:", e));
+              });
+            } else {
+              // Create initial welcome session in db if empty
+              const initialSessId = crypto.randomUUID();
+              const initialSess: ChatSession = {
+                id: initialSessId,
+                title: "Retail Sales Overview",
+                createdAt: Date.now()
+              };
+              set({ sessions: [initialSess], activeSessionId: initialSessId });
+              localStorage.setItem("user_chat_sessions", JSON.stringify([initialSess]));
+              userApi.createSession(userId, initialSessId, "Retail Sales Overview").catch((err) => console.error("Failed to create default session:", err));
+            }
           }
         })
         .catch((e) => {
