@@ -13,7 +13,7 @@ export const SessionSearch: React.FC = () => {
         placeholder="Search chat history..."
         value={searchQuery}
         onChange={(e) => setSearchQuery(e.target.value)}
-        className="w-full pl-8 pr-3 py-2 bg-white dark:bg-surface-hover/60 border border-slate-200 dark:border-border rounded-xl text-xs text-slate-800 dark:text-slate-100 placeholder:text-text-faint focus:ring-2 focus:ring-accent focus:outline-none transition-all"
+        className="w-full pl-8 pr-3 py-2 bg-white dark:bg-surface-hover/60 border border-slate-200 dark:border-border rounded-xl text-sm text-slate-800 dark:text-slate-100 placeholder:text-text-faint focus:ring-2 focus:ring-accent focus:outline-none transition-all"
       />
     </div>
   );

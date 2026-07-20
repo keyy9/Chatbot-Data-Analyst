@@ -81,7 +81,7 @@ export const UserSidebar: React.FC = () => {
   };
 
   const navItemClass = (active = false) =>
-    `w-full flex items-center gap-3 p-2.5 rounded-2xl text-xs font-bold transition-all cursor-pointer ${
+    `w-full flex items-center gap-3 p-2.5 rounded-2xl text-sm font-bold transition-all cursor-pointer ${
       active ? "bg-surface-2 text-text" : "text-text-muted hover:text-text hover:bg-surface-2"
     } ${sidebarCollapsed ? "justify-center" : ""}`;
 
@@ -145,7 +145,7 @@ export const UserSidebar: React.FC = () => {
         <div className="p-3 pt-2">
           <button
             onClick={handleNewChat}
-            className={`w-full bg-accent hover:bg-accent-hover text-white font-bold p-2.5 rounded-2xl shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer text-xs active:scale-[0.98] ${
+            className={`w-full bg-accent hover:bg-accent-hover text-white font-bold p-2.5 rounded-2xl shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer text-sm active:scale-[0.98] ${
               sidebarCollapsed ? "px-0" : ""
             }`}
           >
@@ -195,7 +195,7 @@ export const UserSidebar: React.FC = () => {
         {/* Logout */}
         <button
           onClick={handleLogoutClick}
-          className={`w-full flex items-center gap-3 p-2.5 rounded-2xl text-xs font-bold transition-all text-text-muted hover:text-danger hover:bg-danger/10 cursor-pointer ${
+          className={`w-full flex items-center gap-3 p-2.5 rounded-2xl text-sm font-bold transition-all text-text-muted hover:text-danger hover:bg-danger/10 cursor-pointer ${
             sidebarCollapsed ? "justify-center" : ""
           }`}
           title="Logout account"

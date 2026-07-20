@@ -73,7 +73,7 @@ export const SessionList: React.FC = () => {
                   }
                 }
               }}
-              className={`group flex items-center justify-between px-3 py-2 rounded-xl text-xs transition-all cursor-pointer border ${
+              className={`group flex items-center justify-between px-3 py-2 rounded-xl text-sm transition-all cursor-pointer border ${
                 isActive
                   ? "bg-slate-200 dark:bg-surface-hover text-slate-900 dark:text-white border-slate-300 dark:border-border"
                   : "bg-transparent text-slate-600 dark:text-text-muted border-transparent hover:bg-slate-100 dark:hover:bg-surface-hover/30"
@@ -87,7 +87,7 @@ export const SessionList: React.FC = () => {
                     value={editTitle}
                     onChange={(e) => setEditTitle(e.target.value)}
                     onClick={(e) => e.stopPropagation()}
-                    className="w-full bg-white dark:bg-surface border border-slate-300 dark:border-border text-black dark:text-white px-1 py-0.5 rounded focus:outline-none font-bold text-xs"
+                    className="w-full bg-white dark:bg-surface border border-slate-300 dark:border-border text-black dark:text-white px-1 py-0.5 rounded focus:outline-none font-bold text-sm"
                     autoFocus
                   />
                 ) : (
