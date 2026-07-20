@@ -51,7 +51,7 @@ export const LineChart: React.FC<LineChartProps> = ({ data, xAxisKey, dataKeys }
               color: "#FFFFFF",
             }}
           />
-          {dataKeys.map((key, index) => (
+          {(dataKeys || []).map((key, index) => (
             <Line
               key={key}
               type="monotone"

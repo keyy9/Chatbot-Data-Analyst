@@ -16,7 +16,7 @@ interface PieChartProps {
 const COLORS = ["#12403C", "#12403C", "#00F2FE", "#F59E0B", "#10B981"];
 
 export const PieChart: React.FC<PieChartProps> = ({ data, xAxisKey, dataKeys }) => {
-  const valueKey = dataKeys[0] || "value";
+  const valueKey = (dataKeys && dataKeys[0]) || "value";
   const formattedData = data.map(item => ({
     name: item[xAxisKey],
     value: Number(item[valueKey]) || 0

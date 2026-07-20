@@ -101,7 +101,7 @@ export const UserSidebar: React.FC = () => {
           title="Drag to resize sidebar"
         />
       )}
-      <div>
+      <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
         {/* Brand logo header - click to collapse/expand the sidebar */}
         <button
           type="button"
@@ -156,9 +156,9 @@ export const UserSidebar: React.FC = () => {
 
         {/* Sessions Filter/Search & List */}
         {!sidebarCollapsed && (
-          <div className="px-3 py-1 space-y-3 flex-1 flex flex-col min-h-0 overflow-hidden">
+          <div className="px-3 py-1 space-y-2 flex-1 flex flex-col min-h-0 overflow-hidden">
             <SessionSearch />
-            <div className="overflow-y-auto max-h-[calc(100vh-320px)] scrollbar-thin">
+            <div className="flex-1 overflow-y-auto scrollbar-thin">
               <SessionList />
             </div>
           </div>

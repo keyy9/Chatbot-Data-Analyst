@@ -57,7 +57,7 @@ export const AreaChart: React.FC<AreaChartProps> = ({ data, xAxisKey, dataKeys }
               color: "#FFFFFF",
             }}
           />
-          {dataKeys.map((key, index) => (
+          {(dataKeys || []).map((key, index) => (
             <Area
               key={key}
               type="monotone"

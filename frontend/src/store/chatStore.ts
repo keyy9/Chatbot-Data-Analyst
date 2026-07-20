@@ -43,12 +43,16 @@ function autoRenameSessionIfNeeded(sessionId: string, text: string) {
   try {
     const sessionStore = useSessionStore.getState();
     const currentSession = sessionStore.sessions.find(s => s.id === sessionId);
-    if (currentSession && currentSession.title.startsWith("Analytical Chat")) {
+    if (
+      currentSession &&
+      (currentSession.title.startsWith("Analytical Chat") ||
+        currentSession.title.startsWith("New Chat"))
+    ) {
       let autoTitle = text.trim();
       autoTitle = autoTitle.replace(/^(what is|show me|how many|show|list|get|find|can you tell me|tampilkan|hitung|apakah|bagaimana|siapa)\s+/i, "");
       autoTitle = autoTitle.replace(/\?+$/, "");
-      if (autoTitle.length > 30) {
-        autoTitle = autoTitle.substring(0, 27) + "...";
+      if (autoTitle.length > 200) {
+        autoTitle = autoTitle.substring(0, 197) + "...";
       }
       autoTitle = autoTitle.charAt(0).toUpperCase() + autoTitle.slice(1);
       

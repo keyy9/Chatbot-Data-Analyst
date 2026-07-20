@@ -622,8 +622,19 @@ async def get_session_messages(session_id: str, user_id: str):
             
             # Setup chartData if type is specified
             chart_data = None
-            if r.get("chart_type") and res_json:
-                chart_data = {"type": r["chart_type"], "data": res_json}
+            if r.get("chart_type") and res_json and isinstance(res_json, list) and len(res_json) > 0:
+                cols = list(res_json[0].keys()) if isinstance(res_json[0], dict) else []
+                first_row = res_json[0]
+                numeric_cols = [c for c in cols if isinstance(first_row.get(c), (int, float))]
+                non_numeric_cols = [c for c in cols if not isinstance(first_row.get(c), (int, float))]
+                x_axis_key = non_numeric_cols[0] if non_numeric_cols else (cols[0] if cols else "")
+                data_keys = [c for c in numeric_cols if c != x_axis_key]
+                chart_data = {
+                    "type": r["chart_type"],
+                    "data": res_json,
+                    "xAxisKey": x_axis_key,
+                    "dataKeys": data_keys
+                }
 
             status = "Success"
             if r["role"] == "assistant" and not r["sql"] and not r["needs_clarification"] and "error" in r["text"].lower():
