@@ -155,7 +155,8 @@ class SQLGenerator:
         num_examples: int = 3,
         check_ambiguity: bool = True,
         override_system_prompt: Optional[str] = None,
-        conversation_context: str = ""
+        conversation_context: str = "",
+        error_feedback: Optional[str] = None
     ) -> SQLGenerationResult:
         """
         Generate SQL from natural language question.
@@ -210,10 +211,21 @@ class SQLGenerator:
                 conversation_context=conversation_context
             )
 
+            # On a repair attempt, tell the model exactly what went wrong with
+            # its previous SQL so it can correct the specific column/table/value
+            # instead of blindly regenerating the same broken query.
+            user_prompt = prompt["user"]
+            if error_feedback:
+                user_prompt = (
+                    f"{user_prompt}\n\n## PREVIOUS ATTEMPT FAILED\n{error_feedback}\n"
+                    "Return a corrected PostgreSQL SELECT query that fixes this error. "
+                    "Use only real tables/columns from the schema above."
+                )
+
             # ============ Step 3: Call LLM for SQL generation ============
             llm_response = self.llm_client.generate(
                 system_prompt=prompt["system"],
-                user_prompt=prompt["user"]
+                user_prompt=user_prompt
             )
 
             generated_sql = self._clean_sql_output(llm_response.content)
@@ -306,7 +318,8 @@ class ExplanationGenerator:
         user_question: str,
         generated_sql: str,
         query_result: QueryResult,
-        use_llm: Optional[bool] = None
+        use_llm: Optional[bool] = None,
+        conversation_context: str = ""
     ) -> ExplanationResult:
         """
         Generate a natural language explanation for a query result.
@@ -316,6 +329,8 @@ class ExplanationGenerator:
             generated_sql: The SQL that was executed.
             query_result: The database query result.
             use_llm: Optional override for whether to use the LLM.
+            conversation_context: Recent conversation history so the
+                explanation can reference prior turns and flow naturally.
 
         Returns:
             ExplanationResult: The explanation result.
@@ -350,7 +365,8 @@ class ExplanationGenerator:
             prompt = self.explanation_manager.build_explanation_prompt(
                 user_question,
                 generated_sql,
-                query_result
+                query_result,
+                conversation_context=conversation_context
             )
 
             llm_response = self.llm_client.generate(
@@ -585,11 +601,31 @@ class PipelineOrchestrator:
         try:
             data, columns, execution_time = query_executor_callback(sql_result.sql)
         except Exception as e:
-            logger.error(f"SQL execution failed: {str(e)}")
-            return {
-                "status": "error",
-                "error": f"SQL execution failed: {str(e)}"
-            }
+            logger.warning(f"SQL execution failed, attempting one self-repair: {str(e)}")
+
+            # One repair attempt: feed the failed SQL and the exact DB error
+            # back to the model so it can fix a wrong column/table/literal
+            # rather than returning a confusing hard error to the user.
+            repair_result = self.sql_generator.generate(
+                user_question,
+                schema_definition,
+                check_ambiguity=False,
+                override_system_prompt=override_system_prompt,
+                conversation_context=conversation_context,
+                error_feedback=f"Failed SQL:\n{sql_result.sql}\n\nDatabase error:\n{str(e)}"
+            )
+
+            if not (repair_result.is_valid and repair_result.sql):
+                logger.error(f"SQL self-repair could not produce a valid query: {str(e)}")
+                return {"status": "error", "error": f"SQL execution failed: {str(e)}"}
+
+            try:
+                data, columns, execution_time = query_executor_callback(repair_result.sql)
+                sql_result = repair_result  # use the repaired query downstream
+                logger.info("SQL self-repair succeeded on retry")
+            except Exception as e2:
+                logger.error(f"SQL execution failed after self-repair: {str(e2)}")
+                return {"status": "error", "error": f"SQL execution failed: {str(e2)}"}
 
         # ============ Step 3: Generate Explanation ============
         query_result = QueryResult(
@@ -602,7 +638,8 @@ class PipelineOrchestrator:
         explanation_result = self.explanation_generator.generate(
             user_question,
             sql_result.sql,
-            query_result
+            query_result,
+            conversation_context=conversation_context
         )
 
         # ============ Step 4: Recommend Chart ============

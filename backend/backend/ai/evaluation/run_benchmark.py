@@ -82,13 +82,6 @@ def _format_actual_answer(data) -> str:
     return " | ".join(parts)
 
 
-class MockSQLResult:
-    def __init__(self, sql: str, is_valid: bool = True, error_message: str = None):
-        self.sql = sql
-        self.is_valid = is_valid
-        self.error_message = error_message
-
-
 def _run_single_question(
     question: str,
     gold_sql: str,
@@ -116,48 +109,16 @@ def _run_single_question(
     generated_sql = None
 
     try:
-        import hashlib
-        h = int(hashlib.md5(question.encode('utf-8')).hexdigest(), 16)
-        outcome_rand = h % 10
+        sql_result = sql_generator.generate(question, schema_definition, check_ambiguity=True)
 
-        # Simulate realistic LLM output based on gold SQL without calling LLM (which takes minutes and causes rate limits)
-        if outcome_rand == 0:
-            # Value mismatch: change filter
-            mock_sql = gold_sql
-            if "completed" in mock_sql:
-                mock_sql = mock_sql.replace("completed", "cancelled")
-            elif "paid" in mock_sql:
-                mock_sql = mock_sql.replace("paid", "refunded")
-            elif "2025" in mock_sql:
-                mock_sql = mock_sql.replace("2025", "2024")
-            else:
-                mock_sql = mock_sql + "  -- modified"
-            sql_result = MockSQLResult(mock_sql)
-        elif outcome_rand == 1:
-            # Value/Row count mismatch: change LIMIT or aggregation
-            mock_sql = gold_sql
-            if "LIMIT 5" in mock_sql:
-                mock_sql = mock_sql.replace("LIMIT 5", "LIMIT 3")
-            elif "LIMIT 3" in mock_sql:
-                mock_sql = mock_sql.replace("LIMIT 3", "LIMIT 1")
-            elif "LIMIT 1" in mock_sql:
-                mock_sql = mock_sql.replace("LIMIT 1", "LIMIT 2")
-            else:
-                mock_sql = mock_sql + "  -- modified limit"
-            sql_result = MockSQLResult(mock_sql)
-        elif outcome_rand == 2:
-            # Execution error: reference a non-existent column
-            mock_sql = gold_sql
-            if "order_id" in mock_sql:
-                mock_sql = mock_sql.replace("order_id", "order_identifier_invalid")
-            elif "product_id" in mock_sql:
-                mock_sql = mock_sql.replace("product_id", "product_id_invalid")
-            else:
-                mock_sql = mock_sql.replace("SELECT", "SELECT invalid_column, ")
-            sql_result = MockSQLResult(mock_sql)
-        else:
-            # 100% correct!
-            sql_result = MockSQLResult(gold_sql)
+        if sql_result.is_ambiguous:
+            return {
+                "category": "blocked",
+                "reason": f"ambiguity_detected: {sql_result.clarification_question}",
+                "generated_sql": None,
+                "actual_answer": "",
+                "latency_ms": (time.time() - start) * 1000
+            }
 
         generated_sql = sql_result.sql
 
@@ -258,9 +219,6 @@ def run_benchmark(admin_id: str = None, limit: int = None) -> dict:
         dict: Summary of the run.
     """
     initialize_ai_core()
-    
-    # Simulate data analysis loading state (3 seconds) to feel realistic and fast
-    time.sleep(3.0)
 
     business_client = get_supabase_client()  # the data being asked about
     app_client = get_app_db_client()  # benchmark_questions / eval_runs / eval_results
@@ -295,7 +253,7 @@ def run_benchmark(admin_id: str = None, limit: int = None) -> dict:
 
     for i, q in enumerate(questions):
         if i > 0:
-            time.sleep(0.01)  # fast simulation run
+            time.sleep(2.5)  # stay under Groq free-tier rate limits across a long run
 
         outcome = _run_single_question(
             q["question"], q["gold_sql"], schema_definition,

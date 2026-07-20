@@ -311,30 +311,36 @@ Example: "Online sales make up 65% of total revenue, while in-store sales accoun
         self,
         user_question: str,
         generated_sql: str,
-        query_result: QueryResult
+        query_result: QueryResult,
+        conversation_context: str = ""
     ) -> Dict[str, str]:
         """
         Build a complete explanation prompt.
-        
+
         Args:
             user_question (str): The user's original question.
             generated_sql (str): The SQL that was executed.
             query_result (QueryResult): The database query result.
-        
+            conversation_context (str): Recent conversation history so the
+                explanation can reference earlier turns and read as a
+                continuous conversation rather than an isolated answer.
+
         Returns:
             Dict[str, str]: Dictionary with 'system' and 'user' keys.
         """
         system_prompt = self.SYSTEM_PROMPT
-        
+
         # Format the result data for the prompt
         if query_result.result_type == ResultType.SINGLE_METRIC:
             metric_name, metric_value = self.extract_single_metric(query_result.data)
             formatted_result = f"Metric: {metric_name}, Value: {metric_value}"
         else:
             formatted_result = json.dumps(query_result.data, indent=2, default=str)
-        
-        user_prompt = f"""User's Question: {user_question}
 
+        context_block = f"\n{conversation_context}\n" if conversation_context else ""
+
+        user_prompt = f"""User's Question: {user_question}
+{context_block}
 Database Result:
 {formatted_result}
 
@@ -342,8 +348,8 @@ Columns: {', '.join(query_result.columns)}
 Total Rows: {query_result.row_count}
 Execution Time: {query_result.execution_time}ms
 
-Please provide a clear, natural language explanation of this result."""
-        
+Please provide a clear, natural language explanation of this result. If the recent conversation history is relevant, connect this answer to the earlier turns so the conversation flows."""
+
         return {
             "system": system_prompt,
             "user": user_prompt

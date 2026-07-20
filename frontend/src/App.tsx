@@ -3,9 +3,11 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { useUiStore } from "./store/uiStore";
 import { useAuthStore } from "./store/authStore";
 import { ProtectedRoute } from "./components/UI/ProtectedRoute";
+import { ErrorBoundary } from "./components/UI/ErrorBoundary";
 import { Login } from "./pages/Login";
 import { ChatPage } from "./pages/ChatPage";
 import { Profile } from "./pages/Profile";
+import { RawDataViewer } from "./pages/RawDataViewer";
 import AdminDashboardShell from "./pages/AdminDashboardShell";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
 
@@ -39,42 +41,52 @@ export default function App() {
   }, [theme]);
 
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route path="/reset-password" element={<ResetPasswordPage />} />
-        
-        {/* Protected User Chat Routes */}
-        <Route
-          path="/chat"
-          element={
-            <ProtectedRoute>
-              <ChatPage />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/profile"
-          element={
-            <ProtectedRoute>
-              <Profile />
-            </ProtectedRoute>
-          }
-        />
+    <ErrorBoundary>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
 
-        {/* Protected Admin routes */}
-        <Route
-          path="/admin"
-          element={
-            <AdminRoute>
-              <AdminDashboardShell />
-            </AdminRoute>
-          }
-        />
+          {/* Protected User Chat Routes */}
+          <Route
+            path="/chat"
+            element={
+              <ProtectedRoute>
+                <ChatPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/profile"
+            element={
+              <ProtectedRoute>
+                <Profile />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/data"
+            element={
+              <ProtectedRoute>
+                <RawDataViewer />
+              </ProtectedRoute>
+            }
+          />
 
-        {/* Fallback redirects */}
-        <Route path="*" element={<Navigate to="/login" replace />} />
-      </Routes>
-    </BrowserRouter>
+          {/* Protected Admin routes */}
+          <Route
+            path="/admin"
+            element={
+              <AdminRoute>
+                <AdminDashboardShell />
+              </AdminRoute>
+            }
+          />
+
+          {/* Fallback redirects */}
+          <Route path="*" element={<Navigate to="/login" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }

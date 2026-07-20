@@ -1,20 +1,65 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { X, AlertCircle, CheckCircle } from "lucide-react";
 import type { QueryLog } from "../../types/query";
-import type { ManagedUser } from "../../types/user";
+import { adminApi } from "../../lib/apiClient";
+import { useAuthStore } from "../../store/authStore";
 
 interface QueryInspectDrawerProps {
   selectedLog: QueryLog | null;
   onClose: () => void;
-  managedUsers: ManagedUser[];
+}
+
+interface LiveResult {
+  loading: boolean;
+  available: boolean;
+  columns: string[];
+  rows: Record<string, unknown>[];
+  reason?: string;
 }
 
 export const QueryInspectDrawer: React.FC<QueryInspectDrawerProps> = ({
   selectedLog,
   onClose,
-  managedUsers,
 }) => {
+  const userId = useAuthStore((s) => s.user?.userId);
+  const [liveResult, setLiveResult] = useState<LiveResult | null>(null);
+
+  // query_logs stores the SQL but not the result rows, so fetch the live
+  // output on demand (server re-runs SELECTs read-only). Admin-chat logs that
+  // already carry an inline resultPreview skip this.
+  useEffect(() => {
+    if (!selectedLog || !userId || selectedLog.resultPreview || selectedLog.status === "Failed") {
+      setLiveResult(null);
+      return;
+    }
+    let cancelled = false;
+    setLiveResult({ loading: true, available: false, columns: [], rows: [] });
+    adminApi
+      .getQueryLogResult(userId, selectedLog.id)
+      .then((res) => {
+        if (cancelled) return;
+        setLiveResult({
+          loading: false,
+          available: res.available,
+          columns: res.columns || [],
+          rows: res.rows || [],
+          reason: res.reason,
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setLiveResult({ loading: false, available: false, columns: [], rows: [], reason: "Could not load output." });
+      });
+    return () => { cancelled = true; };
+  }, [selectedLog, userId]);
+
   if (!selectedLog) return null;
+
+  // Prefer an inline preview (admin chat), else the live re-run result.
+  const preview = selectedLog.resultPreview
+    ? { columns: selectedLog.resultPreview.columns, rows: selectedLog.resultPreview.rows as Record<string, unknown>[] }
+    : liveResult?.available
+      ? { columns: liveResult.columns, rows: liveResult.rows }
+      : null;
 
   return (
     <div className="fixed inset-0 z-50 overflow-hidden flex justify-end">
@@ -55,9 +100,7 @@ export const QueryInspectDrawer: React.FC<QueryInspectDrawerProps> = ({
                   Triggered By
                 </span>
                 <span className="text-sm font-bold text-text block mt-1 font-sans">
-                  {managedUsers.some((u) => u.username === selectedLog.user)
-                    ? selectedLog.user
-                    : "Deleted User"}
+                  {selectedLog.user}
                 </span>
               </div>
               <div className="text-right">
@@ -117,7 +160,7 @@ export const QueryInspectDrawer: React.FC<QueryInspectDrawerProps> = ({
               </h4>
               <div className="relative border border-border rounded-xl overflow-hidden shadow-md">
                 <div className="px-4 py-2 bg-surface-2 border-b border-border flex justify-between items-center text-[10px] text-text-muted font-mono">
-                  <span>SQLite Dialect</span>
+                  <span>PostgreSQL Dialect</span>
                 </div>
                 <pre className="p-4 bg-surface font-mono text-[10px] text-text-muted overflow-x-auto whitespace-pre-wrap leading-normal">
                   <code>{selectedLog.generatedSql}</code>
@@ -134,13 +177,17 @@ export const QueryInspectDrawer: React.FC<QueryInspectDrawerProps> = ({
                 <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-xl text-xs font-mono">
                   ⚠️ Query execution failed or blocked by sandbox constraints.
                 </div>
-              ) : selectedLog.resultPreview ? (
+              ) : liveResult?.loading ? (
+                <div className="bg-surface-2 border border-dashed border-border text-text-faint p-8 rounded-xl text-center text-xs font-sans">
+                  Loading live output from the database...
+                </div>
+              ) : preview && preview.rows.length > 0 ? (
                 <div className="border border-border rounded-xl overflow-hidden bg-surface shadow-md">
                   <div className="overflow-x-auto max-h-56 text-xs">
                     <table className="w-full text-left border-collapse">
                       <thead>
                         <tr className="bg-surface-2 border-b border-border text-text-muted font-bold uppercase text-[9px] tracking-wider font-mono">
-                          {selectedLog.resultPreview.columns.map((col, idx) => (
+                          {preview.columns.map((col, idx) => (
                             <th key={idx} className="py-2.5 px-4">
                               {col}
                             </th>
@@ -148,11 +195,11 @@ export const QueryInspectDrawer: React.FC<QueryInspectDrawerProps> = ({
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-border/40 text-text-muted font-mono text-[11px]">
-                        {selectedLog.resultPreview.rows.map((row, rowIdx) => (
+                        {preview.rows.map((row, rowIdx) => (
                           <tr key={rowIdx} className="hover:bg-surface-hover/40">
-                            {selectedLog.resultPreview!.columns.map((col, colIdx) => (
+                            {preview.columns.map((col, colIdx) => (
                               <td key={colIdx} className="py-2.5 px-4 font-medium">
-                                {String(row[col])}
+                                {row[col] === null ? "—" : String(row[col])}
                               </td>
                             ))}
                           </tr>
@@ -163,7 +210,7 @@ export const QueryInspectDrawer: React.FC<QueryInspectDrawerProps> = ({
                 </div>
               ) : (
                 <div className="bg-surface-2 border border-dashed border-border text-text-faint p-8 rounded-xl text-center text-xs font-sans">
-                  No query result preview available.
+                  {liveResult?.reason || "No query output available."}
                 </div>
               )}
             </div>

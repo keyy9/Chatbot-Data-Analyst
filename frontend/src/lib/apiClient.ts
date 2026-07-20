@@ -54,6 +54,28 @@ async function requestGet<T>(path: string, params: Record<string, string>): Prom
   return payload as T;
 }
 
+// DELETE endpoints here read their args as query params (FastAPI path +
+// query signature), so params must go in the URL, not a JSON body -
+// sending them in the body yields a 422 (missing required query param).
+async function requestDelete<T>(path: string, params: Record<string, string>): Promise<T> {
+  let response: Response;
+  const query = new URLSearchParams(params).toString();
+
+  try {
+    response = await fetch(`${API_BASE_URL}${path}?${query}`, { method: "DELETE" });
+  } catch {
+    throw new ApiError(0, "Could not reach the AI backend. Is it running?");
+  }
+
+  const payload = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new ApiError(response.status, payload.detail || "Request failed");
+  }
+
+  return payload as T;
+}
+
 // ============ Auth ============
 
 export interface LoginResponse {
@@ -195,9 +217,22 @@ export const userApi = {
   renameSession: (user_id: string, id: string, title: string) =>
     request<{ status: string }>("/api/user/sessions/rename", { user_id, id, title }),
   deleteSession: (user_id: string, session_id: string) =>
-    request<{ status: string }>(`/api/user/sessions/${session_id}`, { user_id }, "DELETE"),
+    requestDelete<{ status: string }>(`/api/user/sessions/${session_id}`, { user_id }),
   getSessionMessages: (user_id: string, session_id: string) =>
-    requestGet<{ messages: any[] }>(`/api/user/sessions/${session_id}/messages`, { user_id })
+    requestGet<{ messages: any[] }>(`/api/user/sessions/${session_id}/messages`, { user_id }),
+
+  // Raw business-data browsing (read-only, table name validated server-side)
+  getTableRows: (user_id: string, table: string, limit = 100, offset = 0) =>
+    requestGet<{ status: string; data: Record<string, unknown>[]; columns: string[]; table: string }>(
+      `/api/user/tables/${table}/rows`,
+      { user_id, limit: String(limit), offset: String(offset) }
+    )
+};
+
+// ============ Schema/table introspection (shared by admin DB Editor & user raw-data viewer) ============
+
+export const dataApi = {
+  getTables: () => requestGet<{ tables: Record<string, string[]> }>("/api/tables", {})
 };
 
 // ============ Admin chat (read + propose/confirm writes) ============
@@ -241,6 +276,12 @@ export const adminApi = {
     request<{ status: "success"; operation: "read"; data: Record<string, unknown>[]; columns: string[]; execution_time_ms: number }>(
       "/api/admin/query",
       { sql, user_id, session_id }
+    ),
+  // Live output for a logged query (re-runs SELECTs read-only server-side).
+  getQueryLogResult: (user_id: string, log_id: string) =>
+    requestGet<{ available: boolean; columns?: string[]; rows?: Record<string, unknown>[]; reason?: string }>(
+      `/api/admin/query-logs/${log_id}/result`,
+      { user_id }
     )
 };
 
@@ -287,7 +328,12 @@ export interface AnalyticsSummary {
 
 export const analyticsApi = {
   getSummary: (user_id: string) =>
-    requestGet<AnalyticsSummary>("/api/admin/analytics/summary", { user_id })
+    requestGet<AnalyticsSummary>("/api/admin/analytics/summary", { user_id }),
+  getQueryVolume: (user_id: string, days = 14) =>
+    requestGet<{ trend: { date: string; queries: number; successful: number }[] }>(
+      "/api/admin/analytics/query-volume",
+      { user_id, days: String(days) }
+    )
 };
 
 // ============ Saved Observation Notes (Supabase Persisted) ============
@@ -313,5 +359,5 @@ export const notesApi = {
       last_modified: note.lastModified
     }),
   delete: (user_id: string, note_id: string) =>
-    request<{ status: string; message: string }>(`/api/user/notes/${note_id}`, { user_id }, "DELETE")
+    requestDelete<{ status: string }>(`/api/user/notes/${note_id}`, { user_id })
 };

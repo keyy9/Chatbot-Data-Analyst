@@ -1,23 +1,14 @@
 import React, { useState, useMemo, useEffect, useCallback } from "react";
 import { Navigate } from "react-router-dom";
 
-import {
-  initialQueryLogs,
-  initialBenchmarkQuestions,
-  initialUserActivities,
-  queryVolumeTrend,
-  benchmarkAccuracyTrend,
-} from "../data/mockData";
-
 import type { QueryLog } from "../types/query";
-import type { BenchmarkQuestion } from "../types/benchmark";
 import type { ManagedUser, UserActivity } from "../types/user";
 
 import type { Message as ChatMessage } from "../types";
 import { useAuth } from "../hooks/useAuth";
 import { useAuthStore } from "../store/authStore";
 import { useUiStore } from "../store/uiStore";
-import { adminApi, userManagementApi, ApiError, type CompareResponse } from "../lib/apiClient";
+import { adminApi, userManagementApi, analyticsApi, evaluationApi, ApiError, type CompareResponse, type AnalyticsSummary } from "../lib/apiClient";
 import { mapChartRecommendation, SUPPORTED_CHART_TYPES } from "../lib/chartMapping";
 import { mapManagedUser, toApiStatus } from "../lib/userMapping";
 import { ComparisonModal } from "../components/Chat/ComparisonModal";
@@ -73,19 +64,19 @@ export default function App() {
     error: string | null;
   } | null>(null);
 
-  // Simulated Database and Log States
+  // All admin data is real (from the backend) - no mock data anywhere.
   const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([]);
   const [managedUsersLoading, setManagedUsersLoading] = useState(true);
-  const [queryLogs, setQueryLogs] = useState<QueryLog[]>(initialQueryLogs);
 
-  // Real query log history (separate from the mock `queryLogs` state above,
-  // which the Dashboard KPI cards still derive from) - fetched once from
-  // the actual query_logs table for the Query Logs page.
+  // Real query log history from the query_logs table.
   const [realQueryLogs, setRealQueryLogs] = useState<QueryLog[]>([]);
   const [realQueryLogsLoading, setRealQueryLogsLoading] = useState(true);
-  const [benchmarkQuestions, setBenchmarkQuestions] = useState<BenchmarkQuestion[]>(initialBenchmarkQuestions);
-  const [userActivities, setUserActivities] = useState<UserActivity[]>(initialUserActivities);
-  const [accuracyHistory, setAccuracyHistory] = useState(benchmarkAccuracyTrend);
+
+  // Real dashboard analytics (aggregated from query_logs + benchmark evals).
+  const [analyticsSummary, setAnalyticsSummary] = useState<AnalyticsSummary | null>(null);
+  const [benchmarkAccuracy, setBenchmarkAccuracy] = useState(0);
+  const [accuracyHistory, setAccuracyHistory] = useState<{ runId: string; accuracy: number; timestamp: string; avgResponseTimeMs: number }[]>([]);
+  const [queryVolume, setQueryVolume] = useState<{ date: string; queries: number; successful: number }[]>([]);
 
   // Simulation Status States
   const [apiError, setApiError] = useState(false);
@@ -114,15 +105,46 @@ export default function App() {
   const { user: authUser } = useAuthStore();
   const [adminChatSessionId] = useState(() => crypto.randomUUID());
 
-  // Fetch real query log history once on mount
-  useEffect(() => {
+  // Fetch real query log history
+  const loadQueryLogs = useCallback(() => {
     if (!authUser?.userId) return;
+    setRealQueryLogsLoading(true);
     adminApi
       .getQueryLogs(authUser.userId)
       .then((res) => setRealQueryLogs(res.logs))
       .catch(() => setRealQueryLogs([]))
       .finally(() => setRealQueryLogsLoading(false));
   }, [authUser?.userId]);
+
+  useEffect(() => { loadQueryLogs(); }, [loadQueryLogs]);
+
+  // Fetch real dashboard analytics (summary + query volume + benchmark accuracy/history)
+  const loadAnalytics = useCallback(() => {
+    if (!authUser?.userId) return;
+    const uid = authUser.userId;
+    analyticsApi.getSummary(uid).then(setAnalyticsSummary).catch(() => setAnalyticsSummary(null));
+    analyticsApi.getQueryVolume(uid).then((r) => setQueryVolume(r.trend)).catch(() => setQueryVolume([]));
+    evaluationApi.getLatestBenchmarkEval(uid)
+      .then((r) => setBenchmarkAccuracy(Math.round((r.accuracy_score || 0) * 100)))
+      .catch(() => setBenchmarkAccuracy(0)); // 404 when no runs yet
+    evaluationApi.getBenchmarkEvalHistory(uid).then((r) => setAccuracyHistory(r.history)).catch(() => setAccuracyHistory([]));
+  }, [authUser?.userId]);
+
+  useEffect(() => { loadAnalytics(); }, [loadAnalytics]);
+
+  // User Activity is the real managed-user list, projected into the activity shape.
+  const userActivities: UserActivity[] = useMemo(
+    () => managedUsers.map((u) => ({
+      id: u.id,
+      name: u.username,
+      email: u.email,
+      totalQueries: u.totalQueries,
+      loginTime: u.lastActive,
+      lastActivity: u.lastActive,
+      successRate: u.successRate * 100, // ManagedUser.successRate is 0-1; page renders 0-100
+    })),
+    [managedUsers]
+  );
 
   // Real user management - fetch once on mount, refetch after every mutation
   // rather than patching local state, so the list (and its query-stat
@@ -213,58 +235,28 @@ export default function App() {
   const [userMgmtSortOrder, setUserMgmtSortOrder] = useState<"asc" | "desc">("asc");
   const [userMgmtCurrentPage, setUserMgmtCurrentPage] = useState(1);
 
-  // Reset all simulated database states to defaults
+  // Refresh all dashboard data from the database.
   const handleResetData = () => {
-    setQueryLogs(initialQueryLogs);
-    setBenchmarkQuestions(initialBenchmarkQuestions);
-    setUserActivities(initialUserActivities);
-    setAccuracyHistory(benchmarkAccuracyTrend);
-    setEmptySystemState(false);
-    setApiError(false);
-    showToast("🔄 Database and simulation data reset successfully!");
+    refetchManagedUsers();
+    loadQueryLogs();
+    loadAnalytics();
+    showToast("🔄 Dashboard refreshed from the database.");
   };
 
-  // Global calculations based on state (Dashboard Cards)
+  // Dashboard KPI cards - all from real backend data (analytics summary +
+  // benchmark accuracy + managed users).
   const dashboardStats = useMemo(() => {
-    if (emptySystemState) {
-      return {
-        totalQueries: 0,
-        successfulQueries: 0,
-        failedQueries: 0,
-        avgResponseTime: 0,
-        overallAccuracy: 0,
-        activeSessions: 0,
-      };
-    }
-
-    const total = queryLogs.length;
-    const successful = queryLogs.filter((q) => q.status === "Success").length;
-    const failed = queryLogs.filter((q) => q.status === "Failed").length;
-
-    const sumResponse = queryLogs.reduce((acc, q) => acc + q.executionTimeMs, 0);
-    const avgResponse = total > 0 ? Math.round(sumResponse / total) : 0;
-
-    // Accuracy based on benchmark questions that are evaluated
-    const testedQuestions = benchmarkQuestions.filter(
-      (bq) => bq.result && bq.result !== "Pending"
-    );
-    const correct = testedQuestions.filter((bq) => bq.result === "Correct").length;
-    const accuracy =
-      testedQuestions.length > 0
-        ? Math.round((correct / testedQuestions.length) * 100)
-        : 0;
-
     const activeManagedCount = managedUsers.filter((u) => u.status === "Active").length;
 
     return {
-      totalQueries: total,
-      successfulQueries: successful,
-      failedQueries: failed,
-      avgResponseTime: avgResponse,
-      overallAccuracy: accuracy,
+      totalQueries: analyticsSummary?.total_queries ?? 0,
+      successfulQueries: analyticsSummary?.successful_queries ?? 0,
+      failedQueries: analyticsSummary?.failed_queries ?? 0,
+      avgResponseTime: Math.round(analyticsSummary?.avg_execution_time_ms ?? 0),
+      overallAccuracy: benchmarkAccuracy,
       activeSessions: activeManagedCount,
     };
-  }, [queryLogs, benchmarkQuestions, userActivities, managedUsers, emptySystemState]);
+  }, [analyticsSummary, benchmarkAccuracy, managedUsers]);
 
   // Admin Chat Submit Handler - real NL-to-SQL pipeline via /api/admin/ask
   const handleAdminChatSubmit = async (e: React.FormEvent) => {
@@ -494,9 +486,9 @@ export default function App() {
               emptySystemState={emptySystemState}
               handleResetData={handleResetData}
               dashboardStats={dashboardStats}
-              queryVolumeTrend={queryVolumeTrend}
+              queryVolumeTrend={queryVolume}
               accuracyHistory={accuracyHistory}
-              queryLogs={queryLogs}
+              queryLogs={realQueryLogs}
               managedUsers={managedUsers}
               setActiveTab={setActiveTab}
               setUserMgmtStatusFilter={setUserMgmtStatusFilter}
@@ -583,17 +575,16 @@ export default function App() {
       <QueryInspectDrawer
         selectedLog={selectedLog}
         onClose={() => setSelectedLog(null)}
-        managedUsers={managedUsers}
       />
 
       {/* KPI DETAIL MODALS */}
       <KpiDetailsModal
         activeKpiModal={activeKpiModal}
         onClose={() => setActiveKpiModal(null)}
-        queryLogs={queryLogs}
+        queryLogs={realQueryLogs}
         managedUsers={managedUsers}
         userActivities={userActivities}
-        benchmarkQuestions={benchmarkQuestions}
+        benchmarkQuestions={[]}
       />
 
       {/* Per-query model comparison modal */}

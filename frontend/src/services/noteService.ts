@@ -8,7 +8,7 @@ export const noteService = {
     useNoteStore.getState().updateNote(id, title, content, sessionId);
   },
   delete: (id: string) => {
-    useNoteStore.getState().deleteNote(id);
+    return useNoteStore.getState().deleteNote(id);
   },
   getAll: () => {
     return useNoteStore.getState().notes;

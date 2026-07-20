@@ -43,11 +43,15 @@ export const SessionList: React.FC = () => {
     setEditingId(null);
   };
 
-  const handleDeleteSessionClick = (id: string, e: React.MouseEvent) => {
+  const handleDeleteSessionClick = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (confirm("Are you sure you want to delete this chat session? All its messages will be cleared.")) {
-      deleteSession(id);
-      clearSessionMessages(id);
+      try {
+        await deleteSession(id);
+        clearSessionMessages(id);
+      } catch {
+        alert("Failed to delete this session. Please try again.");
+      }
     }
   };
 

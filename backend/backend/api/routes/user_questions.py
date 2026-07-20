@@ -227,7 +227,9 @@ async def ask_question(request: QuestionRequest):
     ensure_session(app_client, request.session_id, request.user_id)
 
     # ============ Multi-turn: merge a clarification answer with the original question ============
-    recent_messages = get_recent_messages(app_client, request.session_id)
+    # Keep the memory window focused (~10 turns): enough for a flowing
+    # conversation, without bloating the prompt with an entire long session.
+    recent_messages = get_recent_messages(app_client, request.session_id, limit=20)
     effective_question = resolve_follow_up(
         recent_messages,
         request.question,
@@ -297,7 +299,8 @@ async def ask_question(request: QuestionRequest):
             request.session_id,
             role="assistant",
             content=result.get("question", ""),
-            needs_clarification=True
+            needs_clarification=True,
+            result_json=result.get("options") or []
         )
         return QuestionResponse(
             status=status,
@@ -485,19 +488,18 @@ async def save_user_note(request: NoteRequest):
 
 @router.delete("/notes/{note_id}")
 async def delete_user_note(note_id: str, user_id: str):
-    """Delete a user note/observation."""
+    """Delete a user note/observation (idempotent - see delete_user_session)."""
     app_client = get_app_db_client()
     try:
-        rows, count, _ = app_client.execute_write(
+        _, count, _ = app_client.execute_write(
             "DELETE FROM user_notes WHERE id = %s AND user_id = %s RETURNING id",
             (note_id, user_id)
         )
-        if count == 0:
-            raise HTTPException(status_code=404, detail="Note not found or does not belong to you")
-        return {"status": "success", "message": "Note deleted"}
-    except HTTPException:
-        raise
+        return {"status": "success", "deleted": count}
     except Exception as e:
+        msg = str(e).lower()
+        if "uuid" in msg or "invalid input syntax" in msg:
+            return {"status": "success", "deleted": 0}
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
@@ -563,7 +565,15 @@ async def rename_user_session(request: RenameSessionRequest):
 
 @router.delete("/sessions/{session_id}")
 async def delete_user_session(session_id: str, user_id: str):
-    """Delete a chat session and all its messages."""
+    """
+    Delete a chat session and all its messages (idempotent).
+
+    Deleting is idempotent: whether or not a matching DB row exists, the
+    caller's intent (this session should be gone) is satisfied on return.
+    A local-only session that was never persisted - including one with a
+    legacy non-UUID id - therefore deletes cleanly from the UI instead of
+    reporting a spurious failure.
+    """
     app_client = get_app_db_client()
     try:
         # First delete messages
@@ -571,16 +581,18 @@ async def delete_user_session(session_id: str, user_id: str):
             "DELETE FROM chat_messages WHERE session_id = %s",
             (session_id,)
         )
-        rows, count, _ = app_client.execute_write(
+        _, count, _ = app_client.execute_write(
             "DELETE FROM chat_sessions WHERE id = %s AND user_id = %s RETURNING id",
             (session_id, user_id)
         )
-        if count == 0:
-            raise HTTPException(status_code=404, detail="Session not found or does not belong to you")
-        return {"status": "success"}
-    except HTTPException:
-        raise
+        return {"status": "success", "deleted": count}
     except Exception as e:
+        # A malformed/non-UUID session id can't match any DB row, so there
+        # is nothing to delete server-side - report success so the client
+        # can clear its local copy.
+        msg = str(e).lower()
+        if "uuid" in msg or "invalid input syntax" in msg:
+            return {"status": "success", "deleted": 0}
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
 
@@ -620,10 +632,27 @@ async def get_session_messages(session_id: str, user_id: str):
                 cols = list(res_json[0].keys()) if isinstance(res_json[0], dict) else []
                 result_preview = {"columns": cols, "rows": res_json}
             
-            # Setup chartData if type is specified
+            # Setup chartData if type is specified (mirrors frontend's
+            # deriveAxisFields in chartMapping.ts, since only the chart
+            # `type` is persisted, not the axis/series keys)
             chart_data = None
-            if r.get("chart_type") and res_json:
-                chart_data = {"type": r["chart_type"], "data": res_json}
+            if r.get("chart_type") and res_json and isinstance(res_json, list) and len(res_json) > 0 and isinstance(res_json[0], dict):
+                chart_type = "bar" if r["chart_type"] == "column" else r["chart_type"]
+                if chart_type in ("bar", "line", "pie", "area"):
+                    first_row = res_json[0]
+                    columns = list(first_row.keys())
+                    numeric_cols = [c for c in columns if isinstance(first_row.get(c), (int, float)) and not isinstance(first_row.get(c), bool)]
+                    non_numeric_cols = [c for c in columns if c not in numeric_cols]
+                    if numeric_cols:
+                        x_axis_key = non_numeric_cols[0] if non_numeric_cols else columns[0]
+                        data_keys = [c for c in numeric_cols if c != x_axis_key]
+                        if data_keys:
+                            chart_data = {
+                                "type": chart_type,
+                                "data": res_json,
+                                "xAxisKey": x_axis_key,
+                                "dataKeys": data_keys
+                            }
 
             status = "Success"
             if r["role"] == "assistant" and not r["sql"] and not r["needs_clarification"] and "error" in r["text"].lower():
@@ -643,5 +672,54 @@ async def get_session_messages(session_id: str, user_id: str):
             })
             
         return {"messages": formatted}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+
+
+@router.get("/tables/{table_name}/rows")
+async def get_table_rows(table_name: str, user_id: str, limit: int = 100, offset: int = 0):
+    """
+    Browse raw rows from any table in the business database (read-only).
+
+    The client supplies only a table name (validated against the live
+    DATABASE_URL schema, never raw SQL), so this can never be used to run
+    arbitrary queries. Every table physically present in DATABASE_URL is
+    browsable here - unlike the chatbot, which only ever sees business
+    tables (app-internal tables are hidden from its schema context).
+    """
+    app_client = get_app_db_client()
+    try:
+        verify_role(app_client, user_id, allowed_roles=("user", "admin"), hard=True)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+    if limit < 1 or limit > 1000:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 1000")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be non-negative")
+
+    schema_loader = get_supabase_schema_loader()
+    available_tables = schema_loader.get_available_tables()
+    if table_name not in available_tables:
+        raise HTTPException(status_code=404, detail=f"Table '{table_name}' not found")
+
+    try:
+        query_executor = get_supabase_query_executor()
+        sql = f"SELECT * FROM {table_name} LIMIT {limit} OFFSET {offset}"
+        rows, columns, exec_time = query_executor.execute(sql)
+
+        log_query(
+            app_client,
+            user_id=user_id,
+            session_id=None,
+            nl_query=f"[raw table view] {table_name}",
+            sql_generated=sql,
+            status="success",
+            exec_time_ms=exec_time
+        )
+
+        return {"status": "success", "data": rows, "columns": columns, "table": table_name}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")

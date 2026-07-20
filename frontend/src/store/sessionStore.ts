@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { ChatSession } from "../types";
-import { userApi } from "../lib/apiClient";
+import { userApi, ApiError } from "../lib/apiClient";
 import { useAuthStore } from "./authStore";
 
 interface SessionState {
@@ -8,7 +8,7 @@ interface SessionState {
   activeSessionId: string | null;
   searchQuery: string;
   createSession: (title?: string) => string;
-  deleteSession: (id: string) => void;
+  deleteSession: (id: string) => Promise<void>;
   renameSession: (id: string, newTitle: string) => void;
   setActiveSessionId: (id: string | null) => void;
   setSearchQuery: (query: string) => void;
@@ -62,22 +62,41 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     return newSessionId;
   },
 
-  deleteSession: (id) => {
+  deleteSession: async (id) => {
     const userId = useAuthStore.getState().user?.userId;
     const storageKey = userId ? `user_chat_sessions_${userId}` : "user_chat_sessions";
 
-    set((state) => {
-      const filtered = state.sessions.filter((s) => s.id !== id);
-      localStorage.setItem(storageKey, JSON.stringify(filtered));
-      let nextActive = state.activeSessionId;
-      if (state.activeSessionId === id) {
-        nextActive = filtered.length > 0 ? filtered[0].id : null;
-      }
-      return { sessions: filtered, activeSessionId: nextActive };
-    });
+    const commitLocalDelete = () => {
+      set((state) => {
+        const filtered = state.sessions.filter((s) => s.id !== id);
+        localStorage.setItem(storageKey, JSON.stringify(filtered));
+        let nextActive = state.activeSessionId;
+        if (state.activeSessionId === id) {
+          nextActive = filtered.length > 0 ? filtered[0].id : null;
+        }
+        return { sessions: filtered, activeSessionId: nextActive };
+      });
+    };
 
-    if (userId) {
-      userApi.deleteSession(userId, id).catch((e) => console.error("Failed to delete session from db:", e));
+    if (!userId) {
+      commitLocalDelete();
+      return;
+    }
+
+    try {
+      await userApi.deleteSession(userId, id);
+      commitLocalDelete();
+    } catch (e) {
+      // A 404 means the session isn't in the DB (local-only, never synced),
+      // so deleting it locally is safe - it can't resurrect from a row that
+      // doesn't exist. Only a real network/server error should block the
+      // delete, since then the DB might still hold it and re-hydrate it.
+      if (e instanceof ApiError && e.status === 404) {
+        commitLocalDelete();
+        return;
+      }
+      console.error("Failed to delete session from db, keeping it locally:", e);
+      throw e;
     }
   },
 
@@ -130,30 +149,41 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               activeSessionId: get().activeSessionId || res.sessions[0].id
             });
             localStorage.setItem(storageKey, JSON.stringify(res.sessions));
-          } else {
-            // Fallback if db has no sessions but local storage has them
-            const saved = localStorage.getItem(storageKey);
-            if (saved) {
-              const parsed = JSON.parse(saved);
+            return;
+          }
+
+          // DB has no sessions: could genuinely mean "user deleted them
+          // all", so don't treat that as license to resurrect a stale
+          // local cache. Only migrate pre-existing local-only sessions
+          // into the DB once, ever, per user.
+          const migrationKey = `sessions_migrated_${userId}`;
+          const alreadyMigrated = localStorage.getItem(migrationKey);
+          const saved = localStorage.getItem(storageKey);
+
+          if (!alreadyMigrated && saved) {
+            const parsed = JSON.parse(saved);
+            if (parsed.length > 0) {
               set({ sessions: parsed, activeSessionId: parsed.length > 0 ? parsed[0].id : null });
-              
-              // Upload them to DB!
               parsed.forEach((sess: ChatSession) => {
-                userApi.createSession(userId, sess.id, sess.title).catch((e) => console.error("Failed to sync session to db on init:", e));
+                userApi.createSession(userId, sess.id, sess.title).catch((e) => console.error("Failed to migrate session to db:", e));
               });
-            } else {
-              // Create initial welcome session in db if empty
-              const initialSessId = crypto.randomUUID();
-              const initialSess: ChatSession = {
-                id: initialSessId,
-                title: "Retail Sales Overview",
-                createdAt: Date.now()
-              };
-              set({ sessions: [initialSess], activeSessionId: initialSessId });
-              localStorage.setItem(storageKey, JSON.stringify([initialSess]));
-              userApi.createSession(userId, initialSessId, "Retail Sales Overview").catch((err) => console.error("Failed to create default session:", err));
+              localStorage.setItem(migrationKey, "1");
+              return;
             }
           }
+
+          localStorage.setItem(migrationKey, "1");
+
+          // Create initial welcome session in db if truly empty
+          const initialSessId = crypto.randomUUID();
+          const initialSess: ChatSession = {
+            id: initialSessId,
+            title: "Retail Sales Overview",
+            createdAt: Date.now()
+          };
+          set({ sessions: [initialSess], activeSessionId: initialSessId });
+          localStorage.setItem(storageKey, JSON.stringify([initialSess]));
+          userApi.createSession(userId, initialSessId, "Retail Sales Overview").catch((err) => console.error("Failed to create default session:", err));
         })
         .catch((e) => {
           console.error("Failed to load sessions from db:", e);

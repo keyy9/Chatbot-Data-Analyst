@@ -8,6 +8,7 @@ import logging
 from typing import Optional, Dict, List, Any
 
 from backend.ai.utils.supabase_client import SupabaseClient, SupabaseConfig
+from backend.ai.rbac.table_denylist import APP_INTERNAL_TABLES
 
 # ============ Setup Logging ============
 logger = logging.getLogger(__name__)
@@ -48,10 +49,14 @@ class SupabaseSchemaLoader:
             return self.schema_cache
         
         logger.info("Loading schema from Supabase...")
-        
-        # Get all tables info
+
+        # Get all tables info. This is the raw truth of DATABASE_URL - every
+        # table physically present - which the raw-data browser needs. The
+        # app-internal tables are filtered out separately, only where the
+        # CHATBOT reads schema (get_schema_definition), so the LLM stays
+        # grounded in business data while raw-data browsing sees everything.
         tables = self.client.get_all_tables_info()
-        
+
         schema = {
             "tables": tables,
             "timestamp": self._get_timestamp(),
@@ -68,33 +73,97 @@ class SupabaseSchemaLoader:
     def get_schema_definition(self, use_cache: bool = True) -> str:
         """
         Get formatted schema definition for prompt injection.
-        
+
         Args:
             use_cache: Whether to use cached schema.
-        
+
         Returns:
             str: Formatted schema.
         """
         schema = self.load_schema(use_cache=use_cache)
-        
+
         schema_text = "## DATABASE SCHEMA\n\n"
-        
+
         for table in schema.get("tables", []):
             table_name = table["name"]
+            # Never expose the app's own control-plane tables to the LLM -
+            # it must only ever generate SQL against business data. (Raw-data
+            # browsing is unaffected; it doesn't go through this method.)
+            if table_name.lower() in APP_INTERNAL_TABLES:
+                continue
             row_count = self.client.get_table_row_count(table_name)
-            
+
             schema_text += f"Table: {table_name} (~ {row_count:,} rows)\n"
-            
+
             for col in table.get("columns", []):
                 col_name = col["name"]
                 col_type = col["type"]
                 nullable = "nullable" if col.get("nullable") else "not null"
-                
+
                 schema_text += f"  - {col_name} ({col_type}) {nullable}\n"
-            
+
+            # Ground the model in REAL categorical values so it filters on
+            # exact literals that exist (e.g. status = 'completed', not
+            # 'complete'). Only low-cardinality short text columns are shown.
+            try:
+                hints = self._format_categorical_hints(table_name, table.get("columns", []))
+                if hints:
+                    schema_text += f"  Example values: {hints}\n"
+            except Exception as e:
+                logger.warning(f"Failed to build categorical hints for {table_name}: {str(e)}")
+
             schema_text += "\n"
-        
+
         return schema_text.strip()
+
+    # Column-type substrings whose literal values don't help SQL generation
+    # (numbers/dates/ids/blobs) - only text-like categoricals are useful.
+    _NON_CATEGORICAL_TYPES = ("int", "numeric", "real", "double", "float",
+                              "timestamp", "date", "time", "bool", "uuid",
+                              "json", "bytea", "serial")
+
+    def _format_categorical_hints(self, table_name: str, columns: List[Dict]) -> str:
+        """
+        Summarize low-cardinality text columns as 'col: [v1, v2, v3]'.
+
+        Uses a single sample query per table (cached with the schema), and
+        infers "categorical" from the sample: a column showing only a few
+        short distinct values is worth grounding; anything with many distinct
+        values (names, free text) is high-cardinality and skipped.
+        """
+        sample_rows = self.get_sample_data(table_name, limit=25)
+        if not sample_rows:
+            return ""
+
+        parts = []
+        for col in columns:
+            col_name = col["name"]
+            col_type = col["type"].lower()
+            if any(skip in col_type for skip in self._NON_CATEGORICAL_TYPES):
+                continue
+            if col_name.lower() == "id" or col_name.lower().endswith("_id"):
+                continue
+
+            distinct = []
+            high_cardinality = False
+            for row in sample_rows:
+                value = row.get(col_name)
+                if value is None:
+                    continue
+                text = str(value)
+                if len(text) > 40:  # free-text column (descriptions, notes)
+                    high_cardinality = True
+                    break
+                if text not in distinct:
+                    distinct.append(text)
+                if len(distinct) > 8:  # too many distinct -> not categorical
+                    high_cardinality = True
+                    break
+
+            if not high_cardinality and distinct:
+                parts.append(f"{col_name}: [{', '.join(distinct)}]")
+
+        return "; ".join(parts)
     
     def get_available_tables(self, use_cache: bool = True) -> List[str]:
         """

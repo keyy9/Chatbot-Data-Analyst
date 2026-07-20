@@ -32,10 +32,14 @@ export const NoteEditor: React.FC<NoteEditorProps> = ({ onClose }) => {
     onClose();
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (confirm("Are you sure you want to delete this observation?")) {
-      deleteNote(note.id);
-      onClose();
+      try {
+        await deleteNote(note.id);
+        onClose();
+      } catch {
+        alert("Failed to delete this observation. Please try again.");
+      }
     }
   };
 

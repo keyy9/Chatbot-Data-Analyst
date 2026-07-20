@@ -372,6 +372,15 @@ async def execute_custom_query(request: SQLQueryRequest):
                 status="success",
                 duration_ms=exec_time
             )
+            log_query(
+                app_client,
+                user_id=request.user_id,
+                session_id=request.session_id,
+                nl_query=request.sql,
+                sql_generated=request.sql,
+                status="success",
+                exec_time_ms=exec_time
+            )
 
             return {
                 "status": "success",
@@ -392,6 +401,14 @@ async def execute_custom_query(request: SQLQueryRequest):
         # substitute %-style placeholders, which misfires on a literal % in
         # e.g. a LIKE/ILIKE pattern with nothing in an empty tuple to fill it.
         proposal = confirmation_store.propose(request.user_id, request.sql, None)
+        log_query(
+            app_client,
+            user_id=request.user_id,
+            session_id=request.session_id,
+            nl_query=f"[proposed, awaiting confirmation] {request.sql}",
+            sql_generated=request.sql,
+            status="success"
+        )
 
         return {"status": "pending_confirmation", "operation": auth.get("operation"), **proposal}
 
@@ -830,6 +847,73 @@ async def get_analytics_summary(user_id: str):
         "status_breakdown": by_status,
         "token_usage_available": False
     }
+
+
+@router.get("/analytics/query-volume")
+async def get_query_volume(user_id: str, days: int = 14):
+    """
+    Real daily query volume (ADMIN only) for the dashboard trend chart,
+    aggregated from `query_logs` over the last `days` days.
+    """
+    app_client = get_app_db_client()
+
+    try:
+        _require_admin(app_client, user_id, "analytics-query-volume")
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+    days = max(1, min(days, 90))
+    rows, _, _ = app_client.execute_read(
+        """
+        SELECT to_char(date_trunc('day', created_at), 'Mon DD') AS date,
+               COUNT(*) AS queries,
+               COUNT(*) FILTER (WHERE status = 'success') AS successful
+        FROM query_logs
+        WHERE created_at >= CURRENT_DATE - make_interval(days => %s)
+        GROUP BY date_trunc('day', created_at)
+        ORDER BY date_trunc('day', created_at)
+        """,
+        (days,)
+    )
+
+    return {"trend": [{"date": r["date"], "queries": r["queries"], "successful": r["successful"]} for r in rows]}
+
+
+@router.get("/query-logs/{log_id}/result")
+async def get_query_log_result(log_id: str, user_id: str):
+    """
+    Re-run a logged SELECT query (ADMIN only) so its live output can be
+    inspected. `query_logs` stores the SQL but not the result rows, so the
+    output is re-fetched on demand against the business DB in a read-only
+    session. Only SELECTs are ever re-executed - a logged write statement is
+    never re-run - and the caller is told when output isn't available.
+    """
+    app_client = get_app_db_client()
+
+    try:
+        _require_admin(app_client, user_id, "query-log-result")
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+    rows, _, _ = app_client.execute_read(
+        "SELECT sql_generated, status FROM query_logs WHERE id = %s",
+        (log_id,)
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Query log not found")
+
+    sql = (rows[0]["sql_generated"] or "").strip()
+    if not sql:
+        return {"available": False, "reason": "No SQL was recorded for this query."}
+    if not sql.lstrip("(").upper().startswith("SELECT"):
+        return {"available": False, "reason": "Live output is only available for read (SELECT) queries."}
+
+    try:
+        query_executor = get_supabase_query_executor()
+        data, columns, _ = query_executor.execute_with_limit(sql, max_rows=100)
+        return {"available": True, "columns": columns, "rows": data}
+    except Exception as e:
+        return {"available": False, "reason": f"Query could not be re-executed: {str(e)}"}
 
 
 @router.get("/benchmark-eval/latest")

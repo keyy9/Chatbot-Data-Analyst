@@ -11,6 +11,7 @@ import { ModelSelector } from "../components/Chat/ModelSelector";
 import { ComparisonModal } from "../components/Chat/ComparisonModal";
 import { NotesDrawer } from "../components/Notes/NotesDrawer";
 import { Loading } from "../components/UI/Loading";
+import { ErrorBoundary } from "../components/UI/ErrorBoundary";
 import { useAutoScroll } from "../hooks/useAutoScroll";
 import { Sun, Moon } from "lucide-react";
 import type { CompareResponse } from "../lib/apiClient";
@@ -76,7 +77,7 @@ export const ChatPage: React.FC = () => {
       {/* Main chat viewport */}
       <div className="flex-1 flex flex-col min-w-0 h-full relative">
         {/* Header bar */}
-        <header className="h-16 flex items-center justify-between px-6 z-10 shadow-sm border-b border-border bg-bg-elevated glass-panel">
+        <header className="h-16 flex-shrink-0 flex items-center justify-between px-6 z-10 shadow-sm border-b border-border bg-bg-elevated glass-panel">
           <div className="flex items-center gap-3">
             <span className="text-sm font-semibold tracking-wide text-text">
               {getActiveSessionTitle()}
@@ -109,33 +110,35 @@ export const ChatPage: React.FC = () => {
           {activeMessages.length === 0 ? (
             <ChatWelcome />
           ) : (
-            <div className="space-y-6 max-w-3xl mx-auto w-full">
-              {activeMessages.map((msg, idx) => {
-                // The AI message itself carries no question field - it's
-                // the preceding user turn. Only needed for export.
-                const precedingQuestion =
-                  msg.sender === "ai" && idx > 0 && activeMessages[idx - 1].sender === "user"
-                    ? activeMessages[idx - 1].text
-                    : undefined;
+            <ErrorBoundary fullPage={false} resetKey={activeSessionId ?? undefined}>
+              <div className="space-y-6 max-w-3xl mx-auto w-full">
+                {activeMessages.map((msg, idx) => {
+                  // The AI message itself carries no question field - it's
+                  // the preceding user turn. Only needed for export.
+                  const precedingQuestion =
+                    msg.sender === "ai" && idx > 0 && activeMessages[idx - 1].sender === "user"
+                      ? activeMessages[idx - 1].text
+                      : undefined;
 
-                return (
-                  <ChatBubble
-                    key={msg.id}
-                    message={msg}
-                    questionText={precedingQuestion}
-                    onClarificationSelect={(option) =>
-                      activeSessionId && submitClarificationAnswer(activeSessionId, option)
-                    }
-                    onCompare={handleCompare}
-                  />
-                );
-              })}
+                  return (
+                    <ChatBubble
+                      key={msg.id}
+                      message={msg}
+                      questionText={precedingQuestion}
+                      onClarificationSelect={(option) =>
+                        activeSessionId && submitClarificationAnswer(activeSessionId, option)
+                      }
+                      onCompare={handleCompare}
+                    />
+                  );
+                })}
 
-              {/* Waiting response loading state */}
-              {isLoading && <Loading />}
+                {/* Waiting response loading state */}
+                {isLoading && <Loading />}
 
-              <div ref={messagesEndRef} />
-            </div>
+                <div ref={messagesEndRef} />
+              </div>
+            </ErrorBoundary>
           )}
         </div>
 
