@@ -208,16 +208,31 @@ Return a JSON object:
         
         Returns:
             Dict: Ambiguity analysis with detection result.
-                {
-                    "is_ambiguous": bool,
-                    "confidence_score": float,
-                    "ambiguity_type": AmbiguityType,
-                    "explanation": str,
-                    "clarification_needed": Optional[str]
-                }
         """
         import logging
         logger = logging.getLogger(__name__)
+
+        question_lower = user_question.lower().strip()
+
+        # Immediate bypass for clear read operations and general listing commands
+        clear_read_indicators = [
+            "show all", "list all", "display all", "get all", "select all",
+            "how many", "count", "total", "sum", "average", "avg", "mean",
+            "max", "min", "highest", "lowest", "top ", "bottom ",
+            "breakdown", "group by", "catalog", "logs", "activity", "benchmark",
+            "show products", "list products", "show customers", "list customers",
+            "show orders", "list orders", "show payments", "list payments",
+            "show users", "list users", "show categories", "list categories",
+            "show table", "list table", "show database", "show schema"
+        ]
+        if any(indicator in question_lower for indicator in clear_read_indicators):
+            return {
+                "is_ambiguous": False,
+                "confidence_score": 1.0,
+                "ambiguity_type": AmbiguityType.UNKNOWN,
+                "explanation": "Question is a clear read/aggregation command, bypassing ambiguity check.",
+                "clarification_needed": None
+            }
 
         # Pattern-based ambiguity detection (fast-track)
         pattern_result = self._check_ambiguity_patterns(user_question)
