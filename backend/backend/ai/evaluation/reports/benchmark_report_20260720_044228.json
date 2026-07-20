@@ -1,0 +1,140 @@
+{
+  "eval_run_id": "afff7a6d-8cf0-40d8-8042-b9394c9580c6",
+  "run_at": "2026-07-20T04:42:28.942429",
+  "total_questions": 10,
+  "execution_accuracy": 0.3,
+  "category_breakdown": {
+    "correct": 3,
+    "value_mismatch": 5,
+    "row_count_mismatch": 0,
+    "execution_error": 2,
+    "syntax_error": 0,
+    "blocked": 0
+  },
+  "avg_latency_ms": 7048.402285575867,
+  "p95_latency_ms": 16106.452703475952,
+  "example_failures": [
+    {
+      "question": "What is the total revenue from completed payments?",
+      "generated_sql": "SELECT SUM(amount) FROM payments WHERE status = 'completed'",
+      "gold_sql": "SELECT SUM(amount) FROM payments WHERE status='paid';",
+      "reason": "No column alignment produces a matching set of rows"
+    },
+    {
+      "question": "Which 5 product categories generated the most revenue from completed orders?",
+      "generated_sql": "SELECT category, SUM(line_total) AS total_revenue\nFROM order_items\nJOIN orders ON order_items.order_id = orders.order_id\nJOIN payments ON orders.order_id = payments.order_id\nWHERE orders.status = 'completed'\nGROUP BY category\nORDER BY total_revenue DESC\nLIMIT 5",
+      "gold_sql": "SELECT p.category, SUM(oi.line_total) rev FROM order_items oi JOIN orders o ON oi.order_id=o.order_id JOIN products p ON oi.product_id=p.product_id WHERE o.status='completed' GROUP BY p.category ORDER BY rev DESC LIMIT 5;",
+      "reason": "Generated SQL failed to execute: column \"category\" does not exist\nLINE 1: SELECT category, SUM(line_total) AS total_revenue\n               ^\n"
+    },
+    {
+      "question": "How many customers are in each tier?",
+      "generated_sql": "SELECT tier, COUNT(*) as total_customers FROM customers GROUP BY tier",
+      "gold_sql": "SELECT tier, COUNT(*) FROM customers GROUP BY tier ORDER BY tier;",
+      "reason": "No column alignment produces matching row order (gold SQL has a top-level ORDER BY, so row order matters)"
+    },
+    {
+      "question": "What is the average order total for completed orders?",
+      "generated_sql": "SELECT AVG(order_total) FROM orders WHERE status = 'completed'",
+      "gold_sql": "SELECT ROUND(AVG(order_total)) FROM orders WHERE status='completed';",
+      "reason": "No column alignment produces a matching set of rows"
+    },
+    {
+      "question": "Which city has the most customers?",
+      "generated_sql": "SELECT city FROM customers GROUP BY city ORDER BY COUNT(*) DESC LIMIT 1",
+      "gold_sql": "SELECT city, COUNT(*) c FROM customers GROUP BY city ORDER BY c DESC LIMIT 1;",
+      "reason": "Column count differs: generated 1 vs gold 2"
+    }
+  ],
+  "results": [
+    {
+      "question_id": "67a19f64-23db-4063-8456-9636957b8910",
+      "question": "How many customers are there in total?",
+      "gold_sql": "SELECT COUNT(*) FROM customers;",
+      "generated_sql": "SELECT COUNT(*) FROM customers",
+      "category": "correct",
+      "reason": "Rows match (order-insensitive, no top-level ORDER BY in gold SQL)",
+      "latency_ms": 9866.92190170288
+    },
+    {
+      "question_id": "8970a6b2-a869-4114-b04a-4a4ba94418ff",
+      "question": "How many orders were completed?",
+      "gold_sql": "SELECT COUNT(*) FROM orders WHERE status='completed';",
+      "generated_sql": "SELECT COUNT(*) FROM orders WHERE status = 'completed'",
+      "category": "correct",
+      "reason": "Rows match (order-insensitive, no top-level ORDER BY in gold SQL)",
+      "latency_ms": 551.0239601135254
+    },
+    {
+      "question_id": "feb49f76-1829-471b-9129-7a96e6e0f60a",
+      "question": "What is the total revenue from completed payments?",
+      "gold_sql": "SELECT SUM(amount) FROM payments WHERE status='paid';",
+      "generated_sql": "SELECT SUM(amount) FROM payments WHERE status = 'completed'",
+      "category": "value_mismatch",
+      "reason": "No column alignment produces a matching set of rows",
+      "latency_ms": 540.8031940460205
+    },
+    {
+      "question_id": "a8b32893-c43b-4dc1-be46-62e4eace26c1",
+      "question": "Which 5 product categories generated the most revenue from completed orders?",
+      "gold_sql": "SELECT p.category, SUM(oi.line_total) rev FROM order_items oi JOIN orders o ON oi.order_id=o.order_id JOIN products p ON oi.product_id=p.product_id WHERE o.status='completed' GROUP BY p.category ORDER BY rev DESC LIMIT 5;",
+      "generated_sql": "SELECT category, SUM(line_total) AS total_revenue\nFROM order_items\nJOIN orders ON order_items.order_id = orders.order_id\nJOIN payments ON orders.order_id = payments.order_id\nWHERE orders.status = 'completed'\nGROUP BY category\nORDER BY total_revenue DESC\nLIMIT 5",
+      "category": "execution_error",
+      "reason": "Generated SQL failed to execute: column \"category\" does not exist\nLINE 1: SELECT category, SUM(line_total) AS total_revenue\n               ^\n",
+      "latency_ms": 9840.940475463867
+    },
+    {
+      "question_id": "4bc6b7aa-154f-4090-bbd7-add436ef0971",
+      "question": "How many customers are in each tier?",
+      "gold_sql": "SELECT tier, COUNT(*) FROM customers GROUP BY tier ORDER BY tier;",
+      "generated_sql": "SELECT tier, COUNT(*) as total_customers FROM customers GROUP BY tier",
+      "category": "value_mismatch",
+      "reason": "No column alignment produces matching row order (gold SQL has a top-level ORDER BY, so row order matters)",
+      "latency_ms": 532.6087474822998
+    },
+    {
+      "question_id": "3bb484fc-3e9a-4f93-9639-92c13fe73ee1",
+      "question": "What is the average order total for completed orders?",
+      "gold_sql": "SELECT ROUND(AVG(order_total)) FROM orders WHERE status='completed';",
+      "generated_sql": "SELECT AVG(order_total) FROM orders WHERE status = 'completed'",
+      "category": "value_mismatch",
+      "reason": "No column alignment produces a matching set of rows",
+      "latency_ms": 15805.229425430298
+    },
+    {
+      "question_id": "2d4eb475-7a90-4023-a146-aee786da7512",
+      "question": "Which city has the most customers?",
+      "gold_sql": "SELECT city, COUNT(*) c FROM customers GROUP BY city ORDER BY c DESC LIMIT 1;",
+      "generated_sql": "SELECT city FROM customers GROUP BY city ORDER BY COUNT(*) DESC LIMIT 1",
+      "category": "value_mismatch",
+      "reason": "Column count differs: generated 1 vs gold 2",
+      "latency_ms": 531.7561626434326
+    },
+    {
+      "question_id": "02d68f2b-fb4f-446e-a4ae-80c7ba5cee00",
+      "question": "How many orders were cancelled?",
+      "gold_sql": "SELECT COUNT(*) FROM orders WHERE status='cancelled';",
+      "generated_sql": "SELECT COUNT(*) FROM orders WHERE status = 'cancelled'",
+      "category": "correct",
+      "reason": "Rows match (order-insensitive, no top-level ORDER BY in gold SQL)",
+      "latency_ms": 16106.452703475952
+    },
+    {
+      "question_id": "3410ff19-04e2-4dbf-aa55-3bcf0b3a23b6",
+      "question": "What are the top 5 best-selling products by quantity in completed orders?",
+      "gold_sql": "SELECT p.product_name, SUM(oi.quantity) q FROM order_items oi JOIN orders o ON oi.order_id=o.order_id JOIN products p ON oi.product_id=p.product_id WHERE o.status='completed' GROUP BY p.product_id ORDER BY q DESC LIMIT 5;",
+      "generated_sql": "SELECT p.product_name, SUM(oi.quantity) AS total_quantity\nFROM order_items oi\nJOIN orders o ON oi.order_id = o.order_id\nJOIN payments p ON o.order_id = p.order_id\nJOIN products pr ON oi.product_id = pr.product_id\nWHERE o.status = 'completed'\nGROUP BY p.product_name\nORDER BY total_quantity DESC\nLIMIT 5",
+      "category": "execution_error",
+      "reason": "Generated SQL failed to execute: column p.product_name does not exist\nLINE 1: SELECT p.product_name, SUM(oi.quantity) AS total_quantity\n               ^\nHINT:  Perhaps you meant to reference the column \"pr.product_name\".\n",
+      "latency_ms": 7863.666296005249
+    },
+    {
+      "question_id": "8b7bc152-574f-448a-86dc-44e90dd2ff68",
+      "question": "How much revenue came from Gold-tier customers (completed payments)?",
+      "gold_sql": "SELECT SUM(pm.amount) FROM payments pm JOIN orders o ON pm.order_id=o.order_id JOIN customers c ON o.customer_id=c.customer_id WHERE pm.status='paid' AND c.tier='Gold';",
+      "generated_sql": "SELECT SUM(line_total) FROM order_items AS oi INNER JOIN orders AS o ON oi.order_id = o.order_id INNER JOIN payments AS p ON o.order_id = p.order_id INNER JOIN customers AS c ON o.customer_id = c.customer_id WHERE c.tier = 'Gold' AND p.status = 'completed'",
+      "category": "value_mismatch",
+      "reason": "No column alignment produces a matching set of rows",
+      "latency_ms": 8844.619989395142
+    }
+  ]
+}

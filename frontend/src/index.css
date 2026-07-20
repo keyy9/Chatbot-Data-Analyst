@@ -1,0 +1,244 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------
+   Lapis AI design tokens
+   Dark-first iOS-style palette. Values live as plain CSS custom
+   properties so they can be swapped per data-theme at runtime; @theme
+   inline exposes them as Tailwind utilities (bg-bg, bg-surface,
+   text-accent, border-border, etc.) that adapt automatically without
+   needing a dark: variant on every usage.
+   --------------------------------------------------------------------- */
+
+:root {
+  color-scheme: dark;
+
+  --bg: #060B14;
+  --bg-elevated: #0A121C;
+  --surface: #0D1922;
+  --surface-2: #122631;
+  --surface-hover: #16303B;
+  --border: #1B3A38;
+  --border-soft: rgba(27, 58, 56, 0.55);
+
+  --accent: #C04E01;
+  --accent-hover: #D9600F;
+  --accent-soft: rgba(192, 78, 1, 0.14);
+  --accent-contrast: #FFFFFF;
+
+  --teal: #12403C;
+  --teal-soft: rgba(18, 64, 60, 0.28);
+  --teal-strong: #1A5A53;
+
+  --sand: #EFD7AB;
+  --sand-soft: rgba(239, 215, 171, 0.14);
+
+  --grey: #D8DADB;
+  --grey-soft: rgba(216, 218, 219, 0.6);
+
+  --text: #F3ECDD;
+  --text-muted: #A8B3B8;
+  --text-faint: #6C7A80;
+
+  --danger: #EF4444;
+  --warning: #F5A524;
+  --success: #2DBE8B;
+
+  --shadow-color: 6, 11, 20;
+  --radius-card: 1.25rem;
+  --radius-pill: 999px;
+}
+
+[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #F6F2E8;
+  --bg-elevated: #FBF8F1;
+  --surface: #FFFFFF;
+  --surface-2: #F1ECE0;
+  --surface-hover: #E9E2D2;
+  --border: #E4DDC9;
+  --border-soft: rgba(228, 221, 201, 0.7);
+
+  --accent: #C04E01;
+  --accent-hover: #A84300;
+  --accent-soft: rgba(192, 78, 1, 0.1);
+  --accent-contrast: #FFFFFF;
+
+  --teal: #12403C;
+  --teal-soft: rgba(18, 64, 60, 0.1);
+  --teal-strong: #0E332F;
+
+  --sand: #C99A55;
+  --sand-soft: rgba(201, 154, 85, 0.14);
+
+  --grey: #5B6670;
+  --grey-soft: rgba(91, 102, 112, 0.16);
+
+  --text: #060B14;
+  --text-muted: #5B6670;
+  --text-faint: #8A9096;
+
+  --danger: #DC2626;
+  --warning: #B45309;
+  --success: #0E8F63;
+
+  --shadow-color: 96, 88, 63;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-bg-elevated: var(--bg-elevated);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-hover: var(--surface-hover);
+  --color-border: var(--border);
+  --color-border-soft: var(--border-soft);
+
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-contrast: var(--accent-contrast);
+
+  --color-teal: var(--teal);
+  --color-teal-soft: var(--teal-soft);
+  --color-teal-strong: var(--teal-strong);
+
+  --color-sand: var(--sand);
+  --color-sand-soft: var(--sand-soft);
+
+  --color-grey: var(--grey);
+  --color-grey-soft: var(--grey-soft);
+
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+  --color-text-faint: var(--text-faint);
+
+  --color-danger: var(--danger);
+  --color-warning: var(--warning);
+  --color-success: var(--success);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Inter", system-ui, sans-serif;
+}
+
+/* Lets existing dark:/light-authored classes key off the app's own
+   theme toggle instead of the OS prefers-color-scheme media query. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+* {
+  border-color: var(--border);
+}
+
+html {
+  background-color: var(--bg);
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background-color: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+/* Animations for micro-interactions */
+@keyframes pulse-slow {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.pulse-slow {
+  animation: pulse-slow 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes slide-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.animate-slide-in {
+  animation: slide-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-rise-in {
+  animation: rise-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes mic-wave {
+  0%, 100% { transform: scaleY(0.4); }
+  50% { transform: scaleY(1); }
+}
+
+.animate-mic-wave {
+  animation: mic-wave 0.9s ease-in-out infinite;
+}
+
+/* Smooth transition for sidebars and panels */
+.transition-all-custom {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--teal-strong);
+}
+
+/* iOS-style translucent surface, for navbars / sheets */
+.glass-panel {
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+}

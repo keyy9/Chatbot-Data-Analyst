@@ -1,0 +1,28 @@
+{
+  "eval_run_id": "b5a8c136-7a3f-4a68-a99a-f986087e4336",
+  "run_at": "2026-07-20T04:32:35.168151",
+  "total_questions": 1,
+  "execution_accuracy": 1.0,
+  "category_breakdown": {
+    "correct": 1,
+    "value_mismatch": 0,
+    "row_count_mismatch": 0,
+    "execution_error": 0,
+    "syntax_error": 0,
+    "blocked": 0
+  },
+  "avg_latency_ms": 2331.2716484069824,
+  "p95_latency_ms": 2331.2716484069824,
+  "example_failures": [],
+  "results": [
+    {
+      "question_id": "67a19f64-23db-4063-8456-9636957b8910",
+      "question": "How many customers are there in total?",
+      "gold_sql": "SELECT COUNT(*) FROM customers;",
+      "generated_sql": "SELECT COUNT(*) FROM customers",
+      "category": "correct",
+      "reason": "Rows match (order-insensitive, no top-level ORDER BY in gold SQL)",
+      "latency_ms": 2331.2716484069824
+    }
+  ]
+}

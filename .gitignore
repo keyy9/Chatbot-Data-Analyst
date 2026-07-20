@@ -1,0 +1,34 @@
+# Secrets
+.env
+.env.local
+*.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.log
+
+# Node
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Claude Code local state
+**/.claude/
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Temporary / Scratch scripts
+scratch/
