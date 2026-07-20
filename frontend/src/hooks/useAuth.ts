@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useAuthStore } from "../store/authStore";
 
 export const useAuth = () => {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
@@ -8,6 +9,7 @@ export const useAuth = () => {
   const handleLogout = () => {
     setIsAuthenticated(false);
     localStorage.setItem("admin_authenticated", "false");
+    useAuthStore.getState().logout();
   };
 
   return {
