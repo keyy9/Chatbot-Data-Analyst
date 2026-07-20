@@ -485,8 +485,9 @@ Please provide a clear, natural language explanation of this result."""
         # Remove any code blocks
         explanation = explanation.replace("```", "")
         
-        # Clean up extra whitespace
-        explanation = " ".join(explanation.split())
+        # Clean up extra horizontal whitespace, but preserve newlines
+        lines = [" ".join(line.split()) for line in explanation.splitlines()]
+        explanation = "\n".join(lines)
         
         return explanation.strip()
 
