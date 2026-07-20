@@ -86,13 +86,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   logout: () => {
+    const userId = get().user?.userId;
+    if (userId) {
+      localStorage.removeItem(`user_notes_${userId}`);
+      localStorage.removeItem(`user_chat_sessions_${userId}`);
+      localStorage.removeItem(`user_chat_messages_${userId}`);
+      localStorage.removeItem(`user_profile_data_${userId}`);
+    }
+    localStorage.removeItem("user_notes");
+    localStorage.removeItem("user_chat_sessions");
+    localStorage.removeItem("user_chat_messages");
+    localStorage.removeItem("user_profile_data");
     set({ user: null, pendingOtpUserId: null });
     localStorage.removeItem("user_session");
     sessionStorage.removeItem("user_session");
     localStorage.removeItem("admin_authenticated");
-    localStorage.removeItem("user_notes");
-    localStorage.removeItem("user_chat_sessions");
-    localStorage.removeItem("user_chat_messages");
   },
 
   initialize: () => {

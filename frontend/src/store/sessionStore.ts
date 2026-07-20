@@ -46,13 +46,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       createdAt: Date.now()
     };
 
+    const userId = useAuthStore.getState().user?.userId;
+    const storageKey = userId ? `user_chat_sessions_${userId}` : "user_chat_sessions";
+
     set((state) => {
       const updated = [newSess, ...state.sessions];
-      localStorage.setItem("user_chat_sessions", JSON.stringify(updated));
+      localStorage.setItem(storageKey, JSON.stringify(updated));
       return { sessions: updated, activeSessionId: newSessionId };
     });
 
-    const userId = useAuthStore.getState().user?.userId;
     if (userId) {
       userApi.createSession(userId, newSessionId, finalTitle).catch((e) => console.error("Failed to save session to db:", e));
     }
@@ -61,9 +63,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   deleteSession: (id) => {
+    const userId = useAuthStore.getState().user?.userId;
+    const storageKey = userId ? `user_chat_sessions_${userId}` : "user_chat_sessions";
+
     set((state) => {
       const filtered = state.sessions.filter((s) => s.id !== id);
-      localStorage.setItem("user_chat_sessions", JSON.stringify(filtered));
+      localStorage.setItem(storageKey, JSON.stringify(filtered));
       let nextActive = state.activeSessionId;
       if (state.activeSessionId === id) {
         nextActive = filtered.length > 0 ? filtered[0].id : null;
@@ -71,7 +76,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return { sessions: filtered, activeSessionId: nextActive };
     });
 
-    const userId = useAuthStore.getState().user?.userId;
     if (userId) {
       userApi.deleteSession(userId, id).catch((e) => console.error("Failed to delete session from db:", e));
     }
@@ -90,15 +94,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }
     finalTitle = checkTitle;
 
+    const userId = useAuthStore.getState().user?.userId;
+    const storageKey = userId ? `user_chat_sessions_${userId}` : "user_chat_sessions";
+
     set((state) => {
       const updated = state.sessions.map((s) =>
         s.id === id ? { ...s, title: finalTitle } : s
       );
-      localStorage.setItem("user_chat_sessions", JSON.stringify(updated));
+      localStorage.setItem(storageKey, JSON.stringify(updated));
       return { sessions: updated };
     });
 
-    const userId = useAuthStore.getState().user?.userId;
     if (userId) {
       userApi.renameSession(userId, id, finalTitle).catch((e) => console.error("Failed to rename session in db:", e));
     }
@@ -114,6 +120,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   initializeSessions: () => {
     const userId = useAuthStore.getState().user?.userId;
+    const storageKey = userId ? `user_chat_sessions_${userId}` : "user_chat_sessions";
     if (userId) {
       userApi.getSessions(userId)
         .then((res) => {
@@ -122,10 +129,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               sessions: res.sessions,
               activeSessionId: get().activeSessionId || res.sessions[0].id
             });
-            localStorage.setItem("user_chat_sessions", JSON.stringify(res.sessions));
+            localStorage.setItem(storageKey, JSON.stringify(res.sessions));
           } else {
             // Fallback if db has no sessions but local storage has them
-            const saved = localStorage.getItem("user_chat_sessions");
+            const saved = localStorage.getItem(storageKey);
             if (saved) {
               const parsed = JSON.parse(saved);
               set({ sessions: parsed, activeSessionId: parsed.length > 0 ? parsed[0].id : null });
@@ -143,14 +150,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
                 createdAt: Date.now()
               };
               set({ sessions: [initialSess], activeSessionId: initialSessId });
-              localStorage.setItem("user_chat_sessions", JSON.stringify([initialSess]));
+              localStorage.setItem(storageKey, JSON.stringify([initialSess]));
               userApi.createSession(userId, initialSessId, "Retail Sales Overview").catch((err) => console.error("Failed to create default session:", err));
             }
           }
         })
         .catch((e) => {
           console.error("Failed to load sessions from db:", e);
-          const saved = localStorage.getItem("user_chat_sessions");
+          const saved = localStorage.getItem(storageKey);
           if (saved) {
             const parsed = JSON.parse(saved);
             set({ sessions: parsed, activeSessionId: parsed.length > 0 ? parsed[0].id : null });
@@ -159,7 +166,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       return;
     }
 
-    const saved = localStorage.getItem("user_chat_sessions");
+    const saved = localStorage.getItem(storageKey);
     if (saved) {
       const parsed: ChatSession[] = JSON.parse(saved);
       set({
@@ -175,7 +182,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         createdAt: Date.now()
       };
       set({ sessions: [initialSess], activeSessionId: initialSessId });
-      localStorage.setItem("user_chat_sessions", JSON.stringify([initialSess]));
+      localStorage.setItem(storageKey, JSON.stringify([initialSess]));
     }
   }
 }));

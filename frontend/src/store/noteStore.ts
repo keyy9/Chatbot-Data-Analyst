@@ -26,13 +26,15 @@ export const useNoteStore = create<NoteState>((set) => ({
       lastModified: Date.now()
     };
 
+    const userId = useAuthStore.getState().user?.userId;
+    const storageKey = userId ? `user_notes_${userId}` : "user_notes";
+
     set((state) => {
       const updated = [newNote, ...state.notes];
-      localStorage.setItem("user_notes", JSON.stringify(updated));
+      localStorage.setItem(storageKey, JSON.stringify(updated));
       return { notes: updated, selectedNoteId: newNote.id };
     });
 
-    const userId = useAuthStore.getState().user?.userId;
     if (userId) {
       notesApi.save(userId, newNote).catch((e) => console.error("Failed to save note to db:", e));
     }
@@ -47,22 +49,27 @@ export const useNoteStore = create<NoteState>((set) => ({
       lastModified: Date.now()
     };
 
+    const userId = useAuthStore.getState().user?.userId;
+    const storageKey = userId ? `user_notes_${userId}` : "user_notes";
+
     set((state) => {
       const updated = state.notes.map((n) => (n.id === id ? updatedNote : n));
-      localStorage.setItem("user_notes", JSON.stringify(updated));
+      localStorage.setItem(storageKey, JSON.stringify(updated));
       return { notes: updated };
     });
 
-    const userId = useAuthStore.getState().user?.userId;
     if (userId) {
       notesApi.save(userId, updatedNote).catch((e) => console.error("Failed to update note in db:", e));
     }
   },
 
   deleteNote: (id) => {
+    const userId = useAuthStore.getState().user?.userId;
+    const storageKey = userId ? `user_notes_${userId}` : "user_notes";
+
     set((state) => {
       const filtered = state.notes.filter((n) => n.id !== id);
-      localStorage.setItem("user_notes", JSON.stringify(filtered));
+      localStorage.setItem(storageKey, JSON.stringify(filtered));
       let nextSelected = state.selectedNoteId;
       if (state.selectedNoteId === id) {
         nextSelected = filtered.length > 0 ? filtered[0].id : null;
@@ -70,7 +77,6 @@ export const useNoteStore = create<NoteState>((set) => ({
       return { notes: filtered, selectedNoteId: nextSelected };
     });
 
-    const userId = useAuthStore.getState().user?.userId;
     if (userId) {
       notesApi.delete(userId, id).catch((e) => console.error("Failed to delete note from db:", e));
     }
@@ -82,16 +88,17 @@ export const useNoteStore = create<NoteState>((set) => ({
 
   initializeNotes: () => {
     const userId = useAuthStore.getState().user?.userId;
+    const storageKey = userId ? `user_notes_${userId}` : "user_notes";
     if (userId) {
       notesApi
         .list(userId)
         .then((res) => {
           if (res.notes && res.notes.length > 0) {
             set({ notes: res.notes, selectedNoteId: res.notes[0].id });
-            localStorage.setItem("user_notes", JSON.stringify(res.notes));
+            localStorage.setItem(storageKey, JSON.stringify(res.notes));
           } else {
             // Fallback if db is empty
-            const saved = localStorage.getItem("user_notes");
+            const saved = localStorage.getItem(storageKey);
             if (saved) {
               const parsed = JSON.parse(saved);
               set({ notes: parsed, selectedNoteId: parsed.length > 0 ? parsed[0].id : null });
@@ -99,20 +106,24 @@ export const useNoteStore = create<NoteState>((set) => ({
               parsed.forEach((note: any) => {
                 notesApi.save(userId, note).catch((e) => console.error("Failed to sync note to db on init:", e));
               });
+            } else {
+              set({ notes: [], selectedNoteId: null });
             }
           }
         })
         .catch((e) => {
           console.error("Failed to load notes from db:", e);
-          const saved = localStorage.getItem("user_notes");
+          const saved = localStorage.getItem(storageKey);
           if (saved) {
             set({ notes: JSON.parse(saved) });
+          } else {
+            set({ notes: [], selectedNoteId: null });
           }
         });
       return;
     }
 
-    const saved = localStorage.getItem("user_notes");
+    const saved = localStorage.getItem(storageKey);
     if (saved) {
       set({ notes: JSON.parse(saved) });
     } else {
@@ -125,7 +136,7 @@ export const useNoteStore = create<NoteState>((set) => ({
         lastModified: Date.now()
       };
       set({ notes: [mockNote] });
-      localStorage.setItem("user_notes", JSON.stringify([mockNote]));
+      localStorage.setItem(storageKey, JSON.stringify([mockNote]));
     }
   }
 }));

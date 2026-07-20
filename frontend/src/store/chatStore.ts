@@ -30,7 +30,9 @@ function appendMessage(
       ...state.messagesBySession,
       [sessionId]: [...currentList, message]
     };
-    localStorage.setItem("user_chat_messages", JSON.stringify(updated));
+    const userId = useAuthStore.getState().user?.userId;
+    const storageKey = userId ? `user_chat_messages_${userId}` : "user_chat_messages";
+    localStorage.setItem(storageKey, JSON.stringify(updated));
     return {
       messagesBySession: updated
     };
@@ -176,7 +178,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((state) => {
       const updated = { ...state.messagesBySession };
       delete updated[sessionId];
-      localStorage.setItem("user_chat_messages", JSON.stringify(updated));
+      const userId = useAuthStore.getState().user?.userId;
+      const storageKey = userId ? `user_chat_messages_${userId}` : "user_chat_messages";
+      localStorage.setItem(storageKey, JSON.stringify(updated));
       return { messagesBySession: updated };
     });
   },
@@ -199,13 +203,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   initializeChat: () => {
-    const saved = localStorage.getItem("user_chat_messages");
+    const userId = useAuthStore.getState().user?.userId;
+    const storageKey = userId ? `user_chat_messages_${userId}` : "user_chat_messages";
+    const saved = localStorage.getItem(storageKey);
     if (saved) {
       try {
         set({ messagesBySession: JSON.parse(saved) });
       } catch (e) {
         console.error("Failed to parse saved chat messages", e);
       }
+    } else {
+      set({ messagesBySession: {} });
     }
   },
 
@@ -221,7 +229,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
             ...state.messagesBySession,
             [sessionId]: res.messages
           };
-          localStorage.setItem("user_chat_messages", JSON.stringify(updated));
+          const storageKey = `user_chat_messages_${userId}`;
+          localStorage.setItem(storageKey, JSON.stringify(updated));
           return { messagesBySession: updated };
         });
       }
