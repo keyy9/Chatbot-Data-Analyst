@@ -36,7 +36,7 @@ export const SQLToggle: React.FC<SQLToggleProps> = ({ sql, executionTimeMs, rowC
         <div className="p-3 border-t border-slate-200 dark:border-border space-y-2 text-left">
           <div className="flex justify-between items-center text-xs text-text-faint font-mono">
             <span>
-              SQL Dialect: SQLite
+              SQL Dialect: PostgreSQL
               {typeof executionTimeMs === "number" && ` Â· ${executionTimeMs.toFixed(0)}ms`}
               {typeof rowCount === "number" && ` Â· ${rowCount} row${rowCount === 1 ? "" : "s"}`}
             </span>
