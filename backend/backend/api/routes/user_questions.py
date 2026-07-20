@@ -171,6 +171,19 @@ def _run_pipeline_for_provider(
         )
 
 
+def _check_write_intent(question: str) -> bool:
+    q = question.lower().strip()
+    write_verbs = ['update', 'delete', 'insert', 'create', 'drop', 'alter', 'truncate']
+    if any(q.startswith(verb) for verb in write_verbs):
+        return True
+    
+    change_patterns = ['change the', 'change total', 'change count', 'change price', 'change status', 'modify the']
+    if any(pattern in q for pattern in change_patterns) and ('to' in q or 'from' in q):
+        return True
+        
+    return False
+
+
 @router.post("/ask", response_model=QuestionResponse)
 async def ask_question(request: QuestionRequest):
     """
@@ -179,6 +192,12 @@ async def ask_question(request: QuestionRequest):
     Both "user" and "admin" roles may use this read-only endpoint.
     """
     _validate_provider(request.model_provider)
+
+    if _check_write_intent(request.question):
+        raise HTTPException(
+            status_code=403,
+            detail="I detected a request to modify database records, but you are currently in Read-Only Mode. To perform write operations (INSERT, UPDATE, DELETE), please switch to the Admin Chat page."
+        )
 
     business_client = get_supabase_client()  # the data being asked about
     app_client = get_app_db_client()  # this app's own control-plane DB
