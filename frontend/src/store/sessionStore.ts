@@ -26,10 +26,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (!finalTitle) {
       let counter = 1;
       const existingTitles = new Set(get().sessions.map(s => s.title.trim().toLowerCase()));
-      while (existingTitles.has(`analytical chat ${counter}`)) {
+      while (existingTitles.has(`new chat ${counter}`)) {
         counter++;
       }
-      finalTitle = `Analytical Chat ${counter}`;
+      finalTitle = `New Chat ${counter}`;
     } else {
       let counter = 1;
       let checkTitle = finalTitle.trim();
@@ -189,8 +189,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           console.error("Failed to load sessions from db:", e);
           const saved = localStorage.getItem(storageKey);
           if (saved) {
-            const parsed = JSON.parse(saved);
-            set({ sessions: parsed, activeSessionId: parsed.length > 0 ? parsed[0].id : null });
+            try {
+              const parsed = JSON.parse(saved).filter((s: any) => s && typeof s.id === "string" && !s.id.startsWith("sess-"));
+              set({ sessions: parsed, activeSessionId: parsed.length > 0 ? parsed[0].id : null });
+            } catch (err) {
+              console.error("Failed to parse sessions from local storage:", err);
+            }
           }
         });
       return;
@@ -198,14 +202,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
     const saved = localStorage.getItem(storageKey);
     if (saved) {
-      const parsed: ChatSession[] = JSON.parse(saved);
-      set({
-        sessions: parsed,
-        activeSessionId: parsed.length > 0 ? parsed[0].id : null
-      });
+      try {
+        const parsed: ChatSession[] = JSON.parse(saved).filter((s: any) => s && typeof s.id === "string" && !s.id.startsWith("sess-"));
+        set({
+          sessions: parsed,
+          activeSessionId: parsed.length > 0 ? parsed[0].id : null
+        });
+      } catch (err) {
+        console.error("Failed to parse sessions from local storage:", err);
+      }
     } else {
       // Create initial welcome session
-      const initialSessId = `sess-${Date.now()}`;
+      const initialSessId = crypto.randomUUID();
       const initialSess: ChatSession = {
         id: initialSessId,
         title: "Retail Sales Overview",

@@ -105,7 +105,7 @@ export const UserSidebar: React.FC = () => {
           title="Drag to resize sidebar"
         />
       )}
-      <div className="flex-1 flex flex-col min-h-0">
+      <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
         {/* Brand logo header - click to collapse/expand the sidebar */}
         <button
           type="button"
