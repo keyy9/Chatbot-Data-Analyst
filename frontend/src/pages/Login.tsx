@@ -11,7 +11,7 @@ type Mode = "login" | "otp" | "forgot" | "forgot-sent";
 
 export const Login: React.FC = () => {
   const navigate = useNavigate();
-  const { login, verifyOtp, requestPasswordReset, user } = useAuthStore();
+  const { login, verifyOtp, resendOtp, requestPasswordReset, user } = useAuthStore();
   const { theme, setTheme, initializeUi } = useUiStore();
 
   const [mode, setMode] = useState<Mode>("login");
@@ -22,6 +22,33 @@ export const Login: React.FC = () => {
   const [rememberMe, setRememberMe] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+
+  const [resendSuccess, setResendSuccess] = useState("");
+  const [resendLoading, setResendLoading] = useState(false);
+  const [resendCountdown, setResendCountdown] = useState(0);
+
+  useEffect(() => {
+    if (resendCountdown <= 0) return;
+    const timer = setInterval(() => {
+      setResendCountdown((prev) => prev - 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [resendCountdown]);
+
+  const handleResendOtp = async () => {
+    if (resendCountdown > 0 || resendLoading) return;
+    setResendLoading(true);
+    setError("");
+    setResendSuccess("");
+    const res = await resendOtp();
+    setResendLoading(false);
+    if (res.success) {
+      setResendSuccess("A new verification code has been sent!");
+      setResendCountdown(30);
+    } else {
+      setError(res.error || "Failed to resend OTP");
+    }
+  };
 
   const handleOtpChange = (value: string, index: number) => {
     if (value && !/^\d$/.test(value)) return;
@@ -98,6 +125,7 @@ export const Login: React.FC = () => {
 
     if (res.requiresOtp) {
       setMode("otp");
+      setResendCountdown(30);
       return;
     }
 
@@ -298,14 +326,40 @@ export const Login: React.FC = () => {
                 {loading ? "Verifying..." : "Confirm"}
               </button>
 
+              {resendSuccess && (
+                <div className="text-center text-xs font-bold text-[#10B981] select-none animate-fade-in">
+                  {resendSuccess}
+                </div>
+              )}
+
+              <div className="text-center text-xs text-text-muted select-none pt-2 flex items-center justify-center gap-1.5 flex-wrap">
+                <span>Didn't receive the OTP? Resend in</span>
+                <span className="font-mono font-bold text-accent">
+                  {`00:${resendCountdown.toString().padStart(2, "0")}`}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleResendOtp}
+                  disabled={resendCountdown > 0 || resendLoading}
+                  className={`font-bold transition-all ml-1 ${
+                    resendCountdown > 0 || resendLoading
+                      ? "text-text-faint cursor-not-allowed opacity-50"
+                      : "text-accent hover:underline cursor-pointer"
+                  }`}
+                >
+                  {resendLoading ? "Sending..." : "Resend OTP"}
+                </button>
+              </div>
+
               <button
                 type="button"
                 onClick={() => {
                   setError("");
                   setOtpDigits(["", "", "", "", "", ""]);
+                  setResendSuccess("");
                   setMode("login");
                 }}
-                className="w-full text-center text-xs font-semibold text-text-muted hover:underline cursor-pointer pt-2"
+                className="w-full text-center text-xs font-semibold text-text-muted hover:underline cursor-pointer pt-1"
               >
                 Back to sign in
               </button>

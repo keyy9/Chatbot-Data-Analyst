@@ -486,7 +486,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           <span
                             className={`text-[8px] font-bold px-1.5 py-0.2 rounded font-sans ${
                               user.role === "Admin"
-                                ? "bg-teal/10 text-teal"
+                                ? "bg-emerald-500/10 text-emerald-400"
                                 : "bg-blue-500/10 text-blue-400"
                             }`}
                           >
@@ -524,7 +524,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               {/* Admin Role Card */}
               <div className="bg-surface-2/45 border border-border p-4 rounded-xl flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="p-2 bg-teal/10 rounded-lg border border-teal/20 text-teal">
+                  <div className="p-2 bg-emerald-500/10 rounded-lg border border-emerald-500/20 text-emerald-400">
                     <Shield className="w-5 h-5" />
                   </div>
                   <div>

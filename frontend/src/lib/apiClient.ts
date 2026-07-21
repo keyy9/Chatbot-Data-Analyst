@@ -92,6 +92,8 @@ export const authApi = {
     request<LoginResponse>("/api/auth/login", { email, password }),
   verifyOtp: (user_id: string, otp_code: string) =>
     request<LoginResponse>("/api/auth/verify-otp", { user_id, otp_code }),
+  resendOtp: (user_id: string) =>
+    request<{ status: string; message: string }>("/api/auth/resend-otp", { user_id }),
   forgotPassword: (email: string) =>
     request<{ message: string }>("/api/auth/forgot-password", { email }),
   resetPassword: (token: string, new_password: string) =>

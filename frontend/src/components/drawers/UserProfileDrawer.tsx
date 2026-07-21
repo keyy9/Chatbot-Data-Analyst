@@ -75,7 +75,7 @@ export const UserProfileDrawer: React.FC<UserProfileDrawerProps> = ({
                 <span
                   className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded text-[9px] font-bold ${
                     selectedManagedUser.role === "Admin"
-                      ? "bg-teal/10 text-teal border border-teal/20"
+                      ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
                       : "bg-blue-500/10 text-blue-400 border border-blue-500/20"
                   }`}
                 >

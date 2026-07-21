@@ -16,16 +16,36 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
     const isPassword = type === "password";
     const inputType = isPassword ? (showPassword ? "text" : "password") : type;
 
+    const handleMouseDown = (e: React.MouseEvent) => {
+      e.preventDefault();
+      setShowPassword(true);
+    };
+
+    const handleMouseUp = () => {
+      setShowPassword(false);
+    };
+
+    const handleMouseLeave = () => {
+      setShowPassword(false);
+    };
+
+    const handleTouchStart = (e: React.TouchEvent) => {
+      setShowPassword(true);
+    };
+
+    const handleTouchEnd = () => {
+      setShowPassword(false);
+    };
     return (
       <div className="space-y-1 w-full text-left">
         {label && (
-          <label className="block text-xs font-bold text-text-muted font-sans">
+          <label className="block text-xs font-bold text-text-muted font-sans select-none">
             {label}
           </label>
         )}
         <div className="relative">
           {icon && (
-            <div className="absolute left-3.5 top-1/2 -translate-y-1/2 flex items-center justify-center text-text-faint">
+            <div className="absolute left-3.5 top-1/2 -translate-y-1/2 flex items-center justify-center text-text-faint select-none">
               {icon}
             </div>
           )}
@@ -50,15 +70,20 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
           {isPassword && (
             <button
               type="button"
-              onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-3.5 top-1/2 -translate-y-1/2 flex items-center justify-center text-text-faint hover:text-text transition-colors cursor-pointer"
+              onMouseDown={handleMouseDown}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseLeave}
+              onTouchStart={handleTouchStart}
+              onTouchEnd={handleTouchEnd}
+              onContextMenu={(e) => e.preventDefault()}
+              className="absolute right-3.5 top-1/2 -translate-y-1/2 flex items-center justify-center text-text-faint hover:text-text transition-colors cursor-pointer select-none"
             >
-              {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              {showPassword ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
             </button>
           )}
         </div>
         {error && (
-          <p className="text-[10px] text-danger font-semibold mt-1 font-sans">
+          <p className="text-[10px] text-danger font-semibold mt-1 font-sans select-none">
             {error}
           </p>
         )}

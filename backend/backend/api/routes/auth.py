@@ -62,6 +62,10 @@ class VerifyOtpRequest(BaseModel):
     otp_code: str
 
 
+class ResendOtpRequest(BaseModel):
+    user_id: str
+
+
 class ForgotPasswordRequest(BaseModel):
     email: str
 
@@ -214,6 +218,45 @@ async def verify_otp(request: VerifyOtpRequest):
     return LoginResponse(
         requires_otp=False, user_id=str(user["id"]), email=user["email"], username=user.get("username"), role=user["role"]
     )
+
+
+@router.post("/resend-otp")
+async def resend_otp(request: ResendOtpRequest):
+    """Resend a new OTP to the user's email."""
+    app_client = get_app_db_client()
+    user_rows, _, _ = app_client.execute_read(
+        "SELECT email, status FROM users WHERE id = %s AND deleted_at IS NULL",
+        (request.user_id,)
+    )
+    if not user_rows:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if user_rows[0]["status"] != "active":
+        raise HTTPException(status_code=403, detail="Account is inactive or suspended")
+        
+    email = user_rows[0]["email"]
+    
+    otp_code = generate_otp()
+    
+    # Delete previous unused OTPs for this user
+    app_client.execute_write(
+        "DELETE FROM login_otp WHERE user_id = %s AND is_used = false RETURNING id",
+        (request.user_id,)
+    )
+    
+    # Insert new OTP
+    app_client.execute_write(
+        """
+        INSERT INTO login_otp (user_id, otp_code, expires_at)
+        VALUES (%s, %s, %s)
+        """,
+        (request.user_id, otp_code, _now() + timedelta(minutes=OTP_EXPIRE_MINUTES))
+    )
+    
+    if not send_otp_email(email, otp_code):
+        raise HTTPException(status_code=500, detail="Failed to send OTP email, try again")
+        
+    return {"status": "success", "message": "New OTP sent successfully"}
 
 
 @router.get("/profile")
