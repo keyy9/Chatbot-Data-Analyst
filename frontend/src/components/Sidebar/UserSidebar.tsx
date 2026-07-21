@@ -148,7 +148,7 @@ export const UserSidebar: React.FC = () => {
             className={navItemClass(location.pathname === "/data")}
             title="Business Database"
           >
-            <Database className="w-4 h-4 text-teal" />
+            <Database className="w-4 h-4 text-emerald-400" />
             {!sidebarCollapsed && <span>Raw Data</span>}
           </button>
         </div>
@@ -202,7 +202,7 @@ export const UserSidebar: React.FC = () => {
           className={navItemClass(location.pathname === "/profile")}
           title="Analyst profile"
         >
-          <User className="w-4 h-4 text-teal" />
+          <User className="w-4 h-4 text-emerald-400" />
           {!sidebarCollapsed && <span>Analyst Profile</span>}
         </button>
 
