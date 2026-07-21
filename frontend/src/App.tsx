@@ -37,7 +37,15 @@ export default function App() {
   }, [initializeUi]);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
+    const el = document.documentElement;
+    el.classList.add("no-theme-transition");
+    el.dataset.theme = theme;
+    // Re-enable transitions only after the browser has painted the new theme,
+    // so the colour change snaps instantly instead of sticking mid-transition.
+    const raf = requestAnimationFrame(() =>
+      requestAnimationFrame(() => el.classList.remove("no-theme-transition"))
+    );
+    return () => cancelAnimationFrame(raf);
   }, [theme]);
 
   return (

@@ -75,12 +75,13 @@ export default function App() {
   // Real dashboard analytics (aggregated from query_logs + benchmark evals).
   const [analyticsSummary, setAnalyticsSummary] = useState<AnalyticsSummary | null>(null);
   const [benchmarkAccuracy, setBenchmarkAccuracy] = useState(0);
+  const [benchmarkEvalResults, setBenchmarkEvalResults] = useState<{ question: string; status: "correct" | "partial" | "wrong" }[]>([]);
   const [accuracyHistory, setAccuracyHistory] = useState<{ runId: string; accuracy: number; timestamp: string; avgResponseTimeMs: number }[]>([]);
   const [queryVolume, setQueryVolume] = useState<{ date: string; queries: number; successful: number }[]>([]);
 
-  // Simulation Status States
-  const [apiError, setApiError] = useState(false);
-  const [emptySystemState, setEmptySystemState] = useState(false);
+  // Retained read-only flags (no simulation toggling - data is always real).
+  const [apiError] = useState(false);
+  const [emptySystemState] = useState(false);
 
   // Testing simulation progress states
   const [isTesting] = useState(false);
@@ -125,12 +126,23 @@ export default function App() {
     analyticsApi.getSummary(uid).then(setAnalyticsSummary).catch(() => setAnalyticsSummary(null));
     analyticsApi.getQueryVolume(uid).then((r) => setQueryVolume(r.trend)).catch(() => setQueryVolume([]));
     evaluationApi.getLatestBenchmarkEval(uid)
-      .then((r) => setBenchmarkAccuracy(Math.round((r.accuracy_score || 0) * 100)))
-      .catch(() => setBenchmarkAccuracy(0)); // 404 when no runs yet
+      .then((r) => {
+        setBenchmarkAccuracy(Math.round((r.accuracy_score || 0) * 100));
+        setBenchmarkEvalResults(r.results || []);
+      })
+      .catch(() => { setBenchmarkAccuracy(0); setBenchmarkEvalResults([]); }); // 404 when no runs yet
     evaluationApi.getBenchmarkEvalHistory(uid).then((r) => setAccuracyHistory(r.history)).catch(() => setAccuracyHistory([]));
   }, [authUser?.userId]);
 
   useEffect(() => { loadAnalytics(); }, [loadAnalytics]);
+
+  // Responsive: auto-collapse the sidebar on small screens.
+  useEffect(() => {
+    const onResize = () => { if (window.innerWidth < 1024) setSidebarCollapsed(true); };
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   // User Activity is the real managed-user list, projected into the activity shape.
   const userActivities: UserActivity[] = useMemo(
@@ -450,7 +462,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen flex font-sans selection:bg-accent/20 selection:text-accent transition-colors duration-200 bg-bg text-text">
+    <div className="h-screen overflow-hidden flex font-sans selection:bg-accent/20 selection:text-accent bg-bg text-text">
       {/* TOAST NOTIFICATION CONTAINER */}
       {toastMessage && (
         <div className="fixed bottom-5 right-5 z-[100] bg-surface border border-accent/30 text-text px-5 py-3 rounded-2xl shadow-2xl flex items-center gap-3 animate-rise-in glass-panel">
@@ -582,9 +594,13 @@ export default function App() {
         activeKpiModal={activeKpiModal}
         onClose={() => setActiveKpiModal(null)}
         queryLogs={realQueryLogs}
-        managedUsers={managedUsers}
         userActivities={userActivities}
-        benchmarkQuestions={[]}
+        benchmarkQuestions={benchmarkEvalResults.map((r, i) => ({
+          id: String(i),
+          question: r.question,
+          expectedSql: "",
+          result: r.status === "correct" ? "Correct" : "Incorrect",
+        }))}
       />
 
       {/* Per-query model comparison modal */}

@@ -1,7 +1,7 @@
 import React from "react";
 import { TrendingUp } from "lucide-react";
 import type { QueryLog } from "../../types/query";
-import type { ManagedUser, UserActivity } from "../../types/user";
+import type { UserActivity } from "../../types/user";
 import type { BenchmarkQuestion } from "../../types/benchmark";
 import { Modal } from "../Modal";
 import {
@@ -25,7 +25,6 @@ interface KpiDetailsModalProps {
     | null;
   onClose: () => void;
   queryLogs: QueryLog[];
-  managedUsers: ManagedUser[];
   userActivities: UserActivity[];
   benchmarkQuestions: BenchmarkQuestion[];
 }
@@ -34,7 +33,6 @@ export const KpiDetailsModal: React.FC<KpiDetailsModalProps> = ({
   activeKpiModal,
   onClose,
   queryLogs,
-  managedUsers,
   userActivities,
   benchmarkQuestions,
 }) => {
@@ -53,7 +51,7 @@ export const KpiDetailsModal: React.FC<KpiDetailsModalProps> = ({
         {activeKpiModal === "total-queries" && (
           <div className="space-y-4">
             <h4 className="text-[10px] font-bold text-text-muted uppercase tracking-wider font-mono">
-              All Simulated Query History
+              All Query History
             </h4>
             <div className="border border-border rounded-xl overflow-hidden bg-surface shadow-md">
               <div className="overflow-x-auto text-[11px]">
@@ -70,9 +68,7 @@ export const KpiDetailsModal: React.FC<KpiDetailsModalProps> = ({
                     {queryLogs.map((log) => (
                       <tr key={log.id} className="hover:bg-surface-hover/40">
                         <td className="py-2 px-4 font-bold text-text">
-                          {managedUsers.some((u) => u.username === log.user)
-                            ? log.user
-                            : "Deleted User"}
+                          {log.user}
                         </td>
                         <td className="py-2 px-4 truncate max-w-xs text-text-muted font-medium">
                           {log.question}
@@ -114,9 +110,7 @@ export const KpiDetailsModal: React.FC<KpiDetailsModalProps> = ({
                       .map((log) => (
                         <tr key={log.id} className="hover:bg-surface-hover/40">
                           <td className="py-2 px-4 font-bold text-text">
-                            {managedUsers.some((u) => u.username === log.user)
-                              ? log.user
-                              : "Deleted User"}
+                            {log.user}
                           </td>
                           <td className="py-2 px-4 truncate max-w-xs text-text-muted font-medium">
                             {log.question}
@@ -158,9 +152,7 @@ export const KpiDetailsModal: React.FC<KpiDetailsModalProps> = ({
                       .map((log) => (
                         <tr key={log.id} className="hover:bg-surface-hover/40">
                           <td className="py-2 px-4 font-bold text-text">
-                            {managedUsers.some((u) => u.username === log.user)
-                              ? log.user
-                              : "Deleted User"}
+                            {log.user}
                           </td>
                           <td className="py-2 px-4 truncate max-w-xs text-text-muted font-medium">
                             {log.question}
@@ -305,7 +297,7 @@ export const KpiDetailsModal: React.FC<KpiDetailsModalProps> = ({
                                 ? "bg-success/10 text-success"
                                 : bq.result === "Incorrect"
                                   ? "bg-danger/10 text-danger"
-                                  : "bg-slate-800 text-text-muted"
+                                  : "bg-surface-2 text-text-muted"
                             }`}
                           >
                             {bq.result || "Pending"}

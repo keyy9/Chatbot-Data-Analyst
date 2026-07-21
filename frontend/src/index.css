@@ -9,6 +9,36 @@
    needing a dark: variant on every usage.
    --------------------------------------------------------------------- */
 
+/* Register theme color tokens as real <color> custom properties. Without
+   this, Chrome can't interpolate a var()-based color when the theme toggles,
+   so elements with `transition-colors`/`transition-all` get STUCK showing the
+   previous theme's color (e.g. dark text/background lingering in light mode).
+   Registering them makes the transition interpolate and settle correctly. */
+@property --bg { syntax: "<color>"; inherits: true; initial-value: #060B14; }
+@property --bg-elevated { syntax: "<color>"; inherits: true; initial-value: #0A121C; }
+@property --surface { syntax: "<color>"; inherits: true; initial-value: #0D1922; }
+@property --surface-2 { syntax: "<color>"; inherits: true; initial-value: #122631; }
+@property --surface-hover { syntax: "<color>"; inherits: true; initial-value: #16303B; }
+@property --border { syntax: "<color>"; inherits: true; initial-value: #1B3A38; }
+@property --border-soft { syntax: "<color>"; inherits: true; initial-value: rgba(27, 58, 56, 0.55); }
+@property --accent { syntax: "<color>"; inherits: true; initial-value: #C04E01; }
+@property --accent-hover { syntax: "<color>"; inherits: true; initial-value: #D9600F; }
+@property --accent-soft { syntax: "<color>"; inherits: true; initial-value: rgba(192, 78, 1, 0.14); }
+@property --accent-contrast { syntax: "<color>"; inherits: true; initial-value: #FFFFFF; }
+@property --teal { syntax: "<color>"; inherits: true; initial-value: #12403C; }
+@property --teal-soft { syntax: "<color>"; inherits: true; initial-value: rgba(18, 64, 60, 0.28); }
+@property --teal-strong { syntax: "<color>"; inherits: true; initial-value: #1A5A53; }
+@property --sand { syntax: "<color>"; inherits: true; initial-value: #EFD7AB; }
+@property --sand-soft { syntax: "<color>"; inherits: true; initial-value: rgba(239, 215, 171, 0.14); }
+@property --grey { syntax: "<color>"; inherits: true; initial-value: #D8DADB; }
+@property --grey-soft { syntax: "<color>"; inherits: true; initial-value: rgba(216, 218, 219, 0.6); }
+@property --text { syntax: "<color>"; inherits: true; initial-value: #F3ECDD; }
+@property --text-muted { syntax: "<color>"; inherits: true; initial-value: #A8B3B8; }
+@property --text-faint { syntax: "<color>"; inherits: true; initial-value: #6C7A80; }
+@property --danger { syntax: "<color>"; inherits: true; initial-value: #EF4444; }
+@property --warning { syntax: "<color>"; inherits: true; initial-value: #F5A524; }
+@property --success { syntax: "<color>"; inherits: true; initial-value: #2DBE8B; }
+
 :root {
   color-scheme: dark;
 
@@ -126,6 +156,18 @@
 
 * {
   border-color: var(--border);
+}
+
+/* While the theme is being switched, kill all transitions so colors snap
+   instantly to the new theme. Chrome otherwise leaves var()-based color
+   transitions stuck on the previous theme's value (dark text/bg lingering
+   in light mode). The class is added, the theme applied, then removed on the
+   next frame - see the theme effect in App.tsx. */
+.no-theme-transition,
+.no-theme-transition *,
+.no-theme-transition *::before,
+.no-theme-transition *::after {
+  transition: none !important;
 }
 
 html {

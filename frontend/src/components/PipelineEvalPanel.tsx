@@ -56,7 +56,7 @@ export const PipelineEvalPanel: React.FC = () => {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Grid3x3 className="w-4 h-4 text-accent" />
-          <h3 className="text-sm font-bold text-white">Pipeline Routing Evaluation</h3>
+          <h3 className="text-sm font-bold text-text">Pipeline Routing Evaluation</h3>
         </div>
         <span className="text-[10px] text-text-muted font-mono">
           {run.total_questions} questions &middot; run {new Date(run.run_at).toLocaleString()}
@@ -72,19 +72,19 @@ export const PipelineEvalPanel: React.FC = () => {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-surface-2 border border-border rounded-lg p-3">
           <span className="text-[9px] uppercase font-bold text-text-muted block">Accuracy</span>
-          <span className="text-lg font-extrabold text-white font-mono">{pct(run.metrics.accuracy)}</span>
+          <span className="text-lg font-extrabold text-text font-mono">{pct(run.metrics.accuracy)}</span>
         </div>
         <div className="bg-surface-2 border border-border rounded-lg p-3">
           <span className="text-[9px] uppercase font-bold text-text-muted block">Macro Precision</span>
-          <span className="text-lg font-extrabold text-white font-mono">{pct(macro_avg.precision)}</span>
+          <span className="text-lg font-extrabold text-text font-mono">{pct(macro_avg.precision)}</span>
         </div>
         <div className="bg-surface-2 border border-border rounded-lg p-3">
           <span className="text-[9px] uppercase font-bold text-text-muted block">Macro Recall</span>
-          <span className="text-lg font-extrabold text-white font-mono">{pct(macro_avg.recall)}</span>
+          <span className="text-lg font-extrabold text-text font-mono">{pct(macro_avg.recall)}</span>
         </div>
         <div className="bg-surface-2 border border-border rounded-lg p-3">
           <span className="text-[9px] uppercase font-bold text-text-muted block">Macro F1</span>
-          <span className="text-lg font-extrabold text-white font-mono">{pct(macro_avg.f1)}</span>
+          <span className="text-lg font-extrabold text-text font-mono">{pct(macro_avg.f1)}</span>
         </div>
       </div>
 

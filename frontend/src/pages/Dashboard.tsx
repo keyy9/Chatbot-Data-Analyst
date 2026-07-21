@@ -536,7 +536,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     </span>
                   </div>
                 </div>
-                <span className="text-xl font-extrabold text-teal font-mono">
+                <span className="text-xl font-extrabold text-text font-mono">
                   {managedUsers.filter((u) => u.role === "Admin").length}
                 </span>
               </div>
@@ -556,7 +556,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     </span>
                   </div>
                 </div>
-                <span className="text-xl font-extrabold text-blue-400 font-mono">
+                <span className="text-xl font-extrabold text-text font-mono">
                   {managedUsers.filter((u) => u.role === "User").length}
                 </span>
               </div>

@@ -85,7 +85,7 @@ export const Benchmark: React.FC = () => {
             disabled={running}
             className="px-3 py-2 text-xs bg-surface-hover border border-border rounded-lg text-text font-bold focus:outline-none cursor-pointer"
           >
-            <option value="all">All Cases (55)</option>
+            <option value="all">All Cases ({questions.length})</option>
             <option value="5">Quick Test (5 cases)</option>
             <option value="10">Medium Test (10 cases)</option>
             <option value="20">Large Test (20 cases)</option>

@@ -22,7 +22,7 @@ export const MyQueryHistoryPanel: React.FC = () => {
 
   return (
     <div className="p-6 rounded-2xl border shadow-md text-left space-y-4 bg-surface border-border">
-      <h3 className="text-sm font-bold text-white flex items-center gap-2">
+      <h3 className="text-sm font-bold text-text flex items-center gap-2">
         <History className="w-4 h-4 text-teal" />
         My Query History
       </h3>

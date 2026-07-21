@@ -56,7 +56,7 @@ export const BenchmarkEvalPanel: React.FC<{ refreshKey?: number }> = ({ refreshK
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Award className="w-4 h-4 text-accent" />
-          <h3 className="text-sm font-bold text-white">Real SQL-Correctness Benchmark Results</h3>
+          <h3 className="text-sm font-bold text-text">Real SQL-Correctness Benchmark Results</h3>
         </div>
         <span className="text-[10px] text-text-muted font-mono">
           {run.total_questions} questions &middot; run {new Date(run.run_at).toLocaleString()}
@@ -72,19 +72,19 @@ export const BenchmarkEvalPanel: React.FC<{ refreshKey?: number }> = ({ refreshK
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-surface-2 border border-border rounded-lg p-3">
           <span className="text-[9px] uppercase font-bold text-text-muted block">Accuracy Score</span>
-          <span className="text-lg font-extrabold text-white font-mono">{pct(run.accuracy_score)}</span>
+          <span className="text-lg font-extrabold text-text font-mono">{pct(run.accuracy_score)}</span>
         </div>
         <div className="bg-surface-2 border border-border rounded-lg p-3">
           <span className="text-[9px] uppercase font-bold text-success block">Correct</span>
-          <span className="text-lg font-extrabold text-white font-mono">{run.correct}</span>
+          <span className="text-lg font-extrabold text-text font-mono">{run.correct}</span>
         </div>
         <div className="bg-surface-2 border border-border rounded-lg p-3">
           <span className="text-[9px] uppercase font-bold text-amber-400 block">Partial</span>
-          <span className="text-lg font-extrabold text-white font-mono">{run.partial}</span>
+          <span className="text-lg font-extrabold text-text font-mono">{run.partial}</span>
         </div>
         <div className="bg-surface-2 border border-border rounded-lg p-3">
           <span className="text-[9px] uppercase font-bold text-danger block">Wrong</span>
-          <span className="text-lg font-extrabold text-white font-mono">{run.wrong}</span>
+          <span className="text-lg font-extrabold text-text font-mono">{run.wrong}</span>
         </div>
       </div>
 

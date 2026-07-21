@@ -75,7 +75,7 @@ export const QueryInspectDrawer: React.FC<QueryInspectDrawerProps> = ({
           {/* Drawer Header */}
           <div className="h-16 px-6 border-b border-border flex items-center justify-between bg-surface-2/90">
             <div>
-              <h3 className="text-sm font-bold tracking-wide text-white">
+              <h3 className="text-sm font-bold tracking-wide text-text">
                 Inspection: Query Details
               </h3>
               <p className="text-[10px] text-text-muted font-semibold mt-0.5 font-mono">
@@ -85,7 +85,7 @@ export const QueryInspectDrawer: React.FC<QueryInspectDrawerProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="p-1 text-text-muted hover:text-white hover:bg-surface-hover rounded-full transition-all cursor-pointer"
+              className="p-1 text-text-muted hover:text-text hover:bg-surface-hover rounded-full transition-all cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>

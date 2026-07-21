@@ -92,7 +92,7 @@ export const UserSidebar: React.FC = () => {
   return (
     <aside
       className={`h-screen flex flex-col border-r border-border bg-bg-elevated text-text z-30 relative ${
-        isDragging ? "" : "transition-all duration-300"
+        isDragging ? "" : "transition-[width] duration-300"
       }`}
       style={{ width: `${currentWidth}px` }}
     >
