@@ -30,7 +30,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from backend.ai import initialize_ai_core
-from backend.ai.llm.generator import get_sql_generator
+from backend.ai.llm.client import SUPPORTED_LLM_PROVIDERS
+from backend.ai.llm.generator import get_sql_generator, aggregate_llm_usage
 from backend.ai.evaluation.evaluator import get_model_evaluator
 from backend.ai.utils.supabase_client import get_supabase_client, get_app_db_client
 from backend.ai.utils.supabase_schema_loader import get_supabase_schema_loader
@@ -82,13 +83,6 @@ def _format_actual_answer(data) -> str:
     return " | ".join(parts)
 
 
-class MockSQLResult:
-    def __init__(self, sql: str, is_valid: bool = True, error_message: str = None):
-        self.sql = sql
-        self.is_valid = is_valid
-        self.error_message = error_message
-
-
 def _run_single_question(
     question: str,
     gold_sql: str,
@@ -116,48 +110,17 @@ def _run_single_question(
     generated_sql = None
 
     try:
-        import hashlib
-        h = int(hashlib.md5(question.encode('utf-8')).hexdigest(), 16)
-        outcome_rand = h % 10
+        sql_result = sql_generator.generate(question, schema_definition, check_ambiguity=True)
 
-        # Simulate realistic LLM output based on gold SQL without calling LLM (which takes minutes and causes rate limits)
-        if outcome_rand == 0:
-            # Value mismatch: change filter
-            mock_sql = gold_sql
-            if "completed" in mock_sql:
-                mock_sql = mock_sql.replace("completed", "cancelled")
-            elif "paid" in mock_sql:
-                mock_sql = mock_sql.replace("paid", "refunded")
-            elif "2025" in mock_sql:
-                mock_sql = mock_sql.replace("2025", "2024")
-            else:
-                mock_sql = mock_sql + "  -- modified"
-            sql_result = MockSQLResult(mock_sql)
-        elif outcome_rand == 1:
-            # Value/Row count mismatch: change LIMIT or aggregation
-            mock_sql = gold_sql
-            if "LIMIT 5" in mock_sql:
-                mock_sql = mock_sql.replace("LIMIT 5", "LIMIT 3")
-            elif "LIMIT 3" in mock_sql:
-                mock_sql = mock_sql.replace("LIMIT 3", "LIMIT 1")
-            elif "LIMIT 1" in mock_sql:
-                mock_sql = mock_sql.replace("LIMIT 1", "LIMIT 2")
-            else:
-                mock_sql = mock_sql + "  -- modified limit"
-            sql_result = MockSQLResult(mock_sql)
-        elif outcome_rand == 2:
-            # Execution error: reference a non-existent column
-            mock_sql = gold_sql
-            if "order_id" in mock_sql:
-                mock_sql = mock_sql.replace("order_id", "order_identifier_invalid")
-            elif "product_id" in mock_sql:
-                mock_sql = mock_sql.replace("product_id", "product_id_invalid")
-            else:
-                mock_sql = mock_sql.replace("SELECT", "SELECT invalid_column, ")
-            sql_result = MockSQLResult(mock_sql)
-        else:
-            # 100% correct!
-            sql_result = MockSQLResult(gold_sql)
+        if sql_result.is_ambiguous:
+            return {
+                "category": "blocked",
+                "reason": f"ambiguity_detected: {sql_result.clarification_question}",
+                "generated_sql": None,
+                "actual_answer": "",
+                "latency_ms": (time.time() - start) * 1000,
+                "llm_response": getattr(sql_result, "llm_response", None)
+            }
 
         generated_sql = sql_result.sql
 
@@ -167,7 +130,8 @@ def _run_single_question(
                 "reason": sql_result.error_message or "No SQL generated",
                 "generated_sql": generated_sql,
                 "actual_answer": "",
-                "latency_ms": (time.time() - start) * 1000
+                "latency_ms": (time.time() - start) * 1000,
+                "llm_response": getattr(sql_result, "llm_response", None)
             }
 
         if not sql_result.is_valid:
@@ -176,7 +140,8 @@ def _run_single_question(
                 "reason": sql_result.error_message or "Rejected by the read-only SQL guard",
                 "generated_sql": generated_sql,
                 "actual_answer": "",
-                "latency_ms": (time.time() - start) * 1000
+                "latency_ms": (time.time() - start) * 1000,
+                "llm_response": getattr(sql_result, "llm_response", None)
             }
 
         try:
@@ -187,7 +152,8 @@ def _run_single_question(
                 "reason": f"Generated SQL failed to execute: {str(e)}",
                 "generated_sql": generated_sql,
                 "actual_answer": "",
-                "latency_ms": (time.time() - start) * 1000
+                "latency_ms": (time.time() - start) * 1000,
+                "llm_response": getattr(sql_result, "llm_response", None)
             }
 
         try:
@@ -198,7 +164,8 @@ def _run_single_question(
                 "reason": f"Gold SQL failed to execute: {str(e)}",
                 "generated_sql": generated_sql,
                 "actual_answer": _format_actual_answer(generated_rows),
-                "latency_ms": (time.time() - start) * 1000
+                "latency_ms": (time.time() - start) * 1000,
+                "llm_response": getattr(sql_result, "llm_response", None)
             }
 
         evaluation = evaluator.evaluate(
@@ -224,7 +191,8 @@ def _run_single_question(
             "reason": verdict["reason"],
             "generated_sql": generated_sql,
             "actual_answer": _format_actual_answer(generated_rows),
-            "latency_ms": (time.time() - start) * 1000
+            "latency_ms": (time.time() - start) * 1000,
+            "llm_response": sql_result.llm_response
         }
 
     except Exception as e:
@@ -234,7 +202,8 @@ def _run_single_question(
             "reason": f"Unexpected error: {str(e)}",
             "generated_sql": generated_sql,
             "actual_answer": "",
-            "latency_ms": (time.time() - start) * 1000
+            "latency_ms": (time.time() - start) * 1000,
+            "llm_response": None
         }
 
 
@@ -246,28 +215,29 @@ def _percentile(sorted_values: List[float], pct: float) -> float:
     return sorted_values[index]
 
 
-def run_benchmark(admin_id: str = None, limit: int = None) -> dict:
+def run_benchmark(admin_id: str = None, limit: int = None, provider: str = "groq") -> dict:
     """
-    Run the benchmark suite and persist results.
+    Run the benchmark suite for one provider and persist results.
 
     Args:
         admin_id: User id to attribute this run to (nullable).
         limit: Optional cap on number of questions to run.
+        provider: Which LLM writes the SQL ("groq" or "gemini"). Recorded on
+            the run, so an accuracy figure can no longer be read without
+            knowing which model produced it.
 
     Returns:
         dict: Summary of the run.
     """
     initialize_ai_core()
-    
-    # Simulate data analysis loading state (3 seconds) to feel realistic and fast
-    time.sleep(3.0)
 
     business_client = get_supabase_client()  # the data being asked about
     app_client = get_app_db_client()  # benchmark_questions / eval_runs / eval_results
 
     schema_loader = get_supabase_schema_loader(business_client)
     query_executor = get_supabase_query_executor(business_client)
-    sql_generator = get_sql_generator()
+    sql_generator = get_sql_generator(provider)
+    model_name = sql_generator.llm_client.config.model
     evaluator = get_model_evaluator()
 
     schema_definition = schema_loader.get_schema_definition()
@@ -292,10 +262,11 @@ def run_benchmark(admin_id: str = None, limit: int = None) -> dict:
     failures = []
     categories: List[str] = []
     latencies: List[float] = []
+    llm_responses: List[dict] = []
 
     for i, q in enumerate(questions):
         if i > 0:
-            time.sleep(0.01)  # fast simulation run
+            time.sleep(2.5)  # stay under Groq free-tier rate limits across a long run
 
         outcome = _run_single_question(
             q["question"], q["gold_sql"], schema_definition,
@@ -306,6 +277,7 @@ def run_benchmark(admin_id: str = None, limit: int = None) -> dict:
         category = outcome["category"]
         categories.append(category)
         latencies.append(outcome["latency_ms"])
+        llm_responses.append(outcome.get("llm_response"))
 
         print(f"[{category.upper():18}] {q['question']}")
 
@@ -354,13 +326,20 @@ def run_benchmark(admin_id: str = None, limit: int = None) -> dict:
     p95_latency_ms = _percentile(sorted_latencies, 0.95)
 
     # ============ Persist legacy summary + per-question rows (backward-compatible) ============
+    usage = aggregate_llm_usage(*llm_responses)
+
     run_data, _, _ = app_client.execute_write(
         """
-        INSERT INTO eval_runs (admin_id, total_questions, correct, partial, wrong, accuracy_score)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        INSERT INTO eval_runs
+            (admin_id, total_questions, correct, partial, wrong, accuracy_score,
+             model_provider, model_name, input_tokens, output_tokens,
+             estimated_cost, avg_latency_ms)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
-        (admin_id, total, correct, partial, wrong, accuracy_score)
+        (admin_id, total, correct, partial, wrong, accuracy_score,
+         provider, model_name, usage["input_tokens"], usage["output_tokens"],
+         usage["estimated_cost"], int(avg_latency_ms))
     )
     eval_run_id = run_data[0]["id"]
 
@@ -385,6 +364,12 @@ def run_benchmark(admin_id: str = None, limit: int = None) -> dict:
         "category_breakdown": {cat: category_counts.get(cat, 0) for cat in CATEGORIES},
         "avg_latency_ms": avg_latency_ms,
         "p95_latency_ms": p95_latency_ms,
+        "model_provider": provider,
+        "model_name": model_name,
+        "input_tokens": usage["input_tokens"],
+        "output_tokens": usage["output_tokens"],
+        "total_tokens": usage["total_tokens"],
+        "estimated_cost": usage["estimated_cost"],
         "example_failures": failures,
         "results": report_rows
     }
@@ -399,6 +384,12 @@ def run_benchmark(admin_id: str = None, limit: int = None) -> dict:
         "category_breakdown": report["category_breakdown"],
         "avg_latency_ms": avg_latency_ms,
         "p95_latency_ms": p95_latency_ms,
+        "model_provider": provider,
+        "model_name": model_name,
+        "input_tokens": usage["input_tokens"],
+        "output_tokens": usage["output_tokens"],
+        "total_tokens": usage["total_tokens"],
+        "estimated_cost": usage["estimated_cost"],
         "report_path": str(report_path),
         # Legacy fields, kept for anything still reading the old shape.
         "correct": correct,
@@ -426,10 +417,69 @@ def run_benchmark(admin_id: str = None, limit: int = None) -> dict:
     return summary
 
 
+def compare_providers(admin_id: str = None, limit: int = None,
+                      providers: List[str] = None) -> dict:
+    """
+    Run the same benchmark against each provider and report them side by side.
+
+    Same questions, same gold SQL, same comparator - only the model writing the
+    SQL differs, so the accuracies are directly comparable. Accuracy alone
+    doesn't decide anything, though: a model two points better at four times the
+    cost is a different call, which is why tokens, cost and latency are reported
+    next to it.
+
+    Args:
+        admin_id: User id to attribute the runs to.
+        limit: Optional cap on questions per provider.
+        providers: Which providers to run. Defaults to every supported one.
+
+    Returns:
+        dict: {provider: summary} for each run.
+    """
+    providers = list(providers or SUPPORTED_LLM_PROVIDERS)
+    summaries = {}
+
+    for provider in providers:
+        print("\n" + "=" * 70)
+        print(f"BENCHMARK: {provider}")
+        print("=" * 70)
+        try:
+            summaries[provider] = run_benchmark(admin_id=admin_id, limit=limit, provider=provider)
+        except Exception as exc:
+            logger.warning(f"Benchmark failed for provider {provider}: {exc}")
+            summaries[provider] = {"error": str(exc), "total_questions": 0, "execution_accuracy": 0.0}
+
+    print("\n" + "=" * 70)
+    print("PROVIDER COMPARISON")
+    print("=" * 70)
+    header = f"{'provider':<10}{'model':<28}{'accuracy':>9}{'correct':>8}{'tokens':>9}{'cost USD':>11}{'avg ms':>9}"
+    print(header)
+    print("-" * len(header))
+    for provider, s in summaries.items():
+        print(
+            f"{provider:<10}{str(s.get('model_name', ''))[:27]:<28}"
+            f"{s.get('execution_accuracy', 0):>9.3f}"
+            f"{s.get('correct', 0):>8}"
+            f"{s.get('total_tokens', 0):>9}"
+            f"{s.get('estimated_cost', 0):>11.6f}"
+            f"{s.get('avg_latency_ms', 0):>9.0f}"
+        )
+    print("=" * 70)
+
+    return summaries
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the NL-to-SQL benchmark suite (result-set execution accuracy).")
     parser.add_argument("--admin-id", default=None, help="User id to attribute this run to.")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of questions run.")
+    parser.add_argument("--provider", default="groq",
+                        help=f"Which LLM writes the SQL. One of {SUPPORTED_LLM_PROVIDERS}.")
+    parser.add_argument("--compare", action="store_true",
+                        help="Run every provider in turn and print a side-by-side comparison.")
     args = parser.parse_args()
 
-    run_benchmark(admin_id=args.admin_id, limit=args.limit)
+    if args.compare:
+        compare_providers(admin_id=args.admin_id, limit=args.limit)
+    else:
+        run_benchmark(admin_id=args.admin_id, limit=args.limit, provider=args.provider)

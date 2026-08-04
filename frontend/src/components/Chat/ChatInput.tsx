@@ -1,13 +1,17 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Mic, Square, MicOff, Send, AlertCircle } from "lucide-react";
+import { Mic, Square, MicOff, Send, AlertCircle, Sparkles } from "lucide-react";
 import { useChatStore } from "../../store/chatStore";
 import { useSessionStore } from "../../store/sessionStore";
 import { useSpeechRecognition } from "../../hooks/useSpeechRecognition";
+import { VoiceWaveform } from "./VoiceWaveform";
+import { QuickAnalyticsLibrary } from "./QuickAnalyticsLibrary";
 
 export const ChatInput: React.FC = () => {
   const { submitUserQuery, isLoading } = useChatStore();
   const { activeSessionId } = useSessionStore();
   const [text, setText] = useState("");
+  const [isLibraryOpen, setIsLibraryOpen] = useState(false);
+  const [micLang, setMicLang] = useState<"id-ID" | "en-US">("id-ID");
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const {
@@ -19,6 +23,7 @@ export const ChatInput: React.FC = () => {
     stop: stopListening,
     resetError: resetMicError,
   } = useSpeechRecognition({
+    lang: micLang,
     onResult: (transcript) => {
       setText((prev) => (prev ? `${prev.trim()} ${transcript}` : transcript));
     },
@@ -52,8 +57,21 @@ export const ChatInput: React.FC = () => {
     }
   };
 
+  const handleSelectTemplate = (queryText: string) => {
+    if (activeSessionId) {
+      submitUserQuery(activeSessionId, queryText);
+    }
+  };
+
   return (
     <div className="w-full space-y-2 font-sans select-none">
+      {/* Quick Analytics Library Modal */}
+      <QuickAnalyticsLibrary
+        isOpen={isLibraryOpen}
+        onClose={() => setIsLibraryOpen(false)}
+        onSelectQuery={handleSelectTemplate}
+      />
+
       {/* Mic error banner */}
       {micError && (
         <div className="flex items-center gap-2 p-3 bg-danger/10 border border-danger/25 rounded-2xl text-danger text-xs text-left animate-rise-in shadow-sm">
@@ -79,16 +97,11 @@ export const ChatInput: React.FC = () => {
         </div>
       )}
 
-      {/* Listening indicator */}
+      {/* Listening indicator with VoiceWaveform */}
       {isListening && (
         <div className="flex items-center justify-between p-3 bg-accent-soft border border-accent/25 rounded-2xl text-accent text-xs shadow-sm animate-rise-in">
           <div className="flex items-center gap-2.5 min-w-0">
-            <div className="flex items-end gap-0.5 h-3 flex-shrink-0">
-              <span className="w-0.5 bg-accent rounded-full animate-mic-wave" style={{ animationDelay: "0ms" }} />
-              <span className="w-0.5 bg-accent rounded-full animate-mic-wave" style={{ animationDelay: "150ms" }} />
-              <span className="w-0.5 bg-accent rounded-full animate-mic-wave" style={{ animationDelay: "300ms" }} />
-            </div>
-            <span className="font-bold tracking-wide flex-shrink-0">Listening...</span>
+            <VoiceWaveform isListening={isListening} />
             {interimTranscript && (
               <span className="text-text-muted font-medium truncate">{interimTranscript}</span>
             )}
@@ -104,6 +117,16 @@ export const ChatInput: React.FC = () => {
 
       {/* Main Form input bar */}
       <form onSubmit={handleSend} className="relative flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setIsLibraryOpen(true)}
+          className="px-3.5 py-3 rounded-full bg-accent/10 border border-accent/20 hover:bg-accent hover:text-white text-accent transition-all cursor-pointer flex items-center gap-1.5 text-xs font-bold shadow-sm flex-shrink-0"
+          title="Open Quick Analytics Preset Templates"
+        >
+          <Sparkles className="w-4 h-4" />
+          <span className="hidden sm:inline">Quick Analytics</span>
+        </button>
+
         <input
           ref={inputRef}
           type="text"
@@ -114,7 +137,16 @@ export const ChatInput: React.FC = () => {
           className="flex-1 bg-surface-2 border border-border text-text placeholder:text-text-faint pl-5 pr-28 py-4.5 rounded-full text-sm focus:ring-2 focus:ring-accent/40 focus:border-accent focus:outline-none transition-all shadow-sm font-semibold py-[17px]"
         />
 
-        <div className="absolute right-3 flex items-center gap-2">
+        <div className="absolute right-3 flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setMicLang(micLang === "id-ID" ? "en-US" : "id-ID")}
+            className="text-[10px] font-extrabold px-2 py-1 rounded-full bg-surface border border-border/80 text-text-muted hover:text-accent hover:border-accent/40 cursor-pointer transition-all shadow-2xs font-mono"
+            title={`Voice Language: ${micLang === "id-ID" ? "Bahasa Indonesia (id-ID)" : "English (en-US)"}. Click to switch.`}
+          >
+            {micLang === "id-ID" ? "🇮🇩 ID" : "🇺🇸 EN"}
+          </button>
+
           <button
             type="button"
             onClick={handleMicClick}
@@ -126,7 +158,7 @@ export const ChatInput: React.FC = () => {
                 ? "bg-surface text-text-faint"
                 : "bg-surface hover:bg-surface-hover text-text-muted hover:text-accent"
             }`}
-            title={micSupported ? "Voice input" : "Voice input unavailable in this browser"}
+            title={micSupported ? `Voice input (${micLang})` : "Voice input unavailable in this browser"}
           >
             {isListening ? (
               <Square className="w-4 h-4 fill-current" />

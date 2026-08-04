@@ -6,7 +6,6 @@ interface HeaderProps {
   activeTab: string;
   theme: "dark" | "light";
   setTheme: (theme: "dark" | "light") => void;
-  apiError: boolean;
   handleLogout: () => void;
 }
 
@@ -48,7 +47,7 @@ export const Header: React.FC<HeaderProps> = ({
         <span className="text-sm font-medium text-text-muted">
           Conversational Analyst
         </span>
-        <span className="text-border">/</span>
+        <span className="text-text-faint">/</span>
         <span className="text-sm font-semibold capitalize text-text">
           {getTabLabel(activeTab)}
         </span>

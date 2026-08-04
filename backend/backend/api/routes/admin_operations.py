@@ -12,36 +12,43 @@ write is recorded in `admin_action_logs` (also in the control-plane DB).
 """
 
 import asyncio
+import logging
 import time
 import threading
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Set
 
-from backend.ai.rbac.roles import Role
-from backend.ai.rbac.access_control import UserContext, get_access_control
-from backend.ai.rbac.user_lookup import verify_role
+from backend.ai.rbac.access_control import get_access_control
+from backend.api.dependencies import require_admin, require_admin_session
+from backend.api.services import analytics_service, evaluation_service
+from backend.api.services.db_errors import explain_database_error
 from backend.ai.validators.sql_guard_rbac import (
     get_sql_guard_rbac,
     get_admin_query_builder,
     get_admin_confirmation_store
 )
 from backend.ai.validators.admin_write_guard import get_admin_write_guard
-from backend.ai.utils.supabase_client import get_supabase_client, get_app_db_client, SupabaseClient
+from backend.ai.validators.write_intent import has_write_intent
+from backend.ai.utils.supabase_client import get_supabase_client, get_app_db_client
 from backend.ai.utils.supabase_executor import get_supabase_query_executor
 from backend.ai.utils.supabase_schema_loader import get_supabase_schema_loader
 from backend.ai.utils.chat_history import (
-    get_recent_messages, add_message, resolve_follow_up, build_conversation_context, ensure_session
+    get_recent_messages, add_message, resolve_follow_up, build_conversation_context,
+    ensure_session, find_last_select
 )
 from backend.ai.monitoring.logger import get_monitoring_logger, EventType
 from backend.ai.monitoring.query_log_repository import log_query
 from backend.ai.llm.client import get_llm_client, SUPPORTED_LLM_PROVIDERS
-from backend.ai.llm.generator import SQLGenerator, get_explanation_generator, get_chart_recommender
-from backend.ai.prompts.explanation_prompt import QueryResult
+from backend.ai.llm.generator import (
+    SQLGenerator,
+    get_chart_recommender,
+    get_pipeline_orchestrator,
+    aggregate_llm_usage
+)
 from backend.ai.prompts.clarification_prompt import get_clarification_prompt_manager
 from backend.ai.prompts.admin_write_prompt import ADMIN_WRITE_SYSTEM_PROMPT
-from backend.ai.explanation.explainer import get_source_attributor
 
 
 def _validate_provider(provider: str) -> None:
@@ -106,19 +113,35 @@ class BenchmarkQuestionRequest(BaseModel):
 class BenchmarkRunRequest(BaseModel):
     user_id: str
     limit: Optional[int] = None
+    mode: Optional[str] = "all"  # "all" | "sql" | "compare" | "pipeline"
 
 
-_benchmark_run_active = False
+_active_eval_modes: Set[str] = set()
 _benchmark_run_error: Optional[str] = None
 _benchmark_run_lock = threading.Lock()
 
 
-def _run_benchmark_in_background(admin_id: str, limit: Optional[int]) -> None:
+def _run_benchmark_in_background(admin_id: str, limit: Optional[int], mode: str = "all") -> None:
     """Run outside the request lifecycle; a suite can take minutes due to LLM rate limits."""
-    global _benchmark_run_active, _benchmark_run_error
+    global _benchmark_run_error
     try:
-        from backend.ai.evaluation.run_benchmark import run_benchmark
-        run_benchmark(admin_id=admin_id, limit=limit)
+        from backend.ai.evaluation.run_pipeline_eval import run_pipeline_eval
+        from backend.ai.evaluation.run_benchmark import run_benchmark, compare_providers
+
+        if mode == "pipeline":
+            run_pipeline_eval(admin_id=admin_id, limit=limit)
+        elif mode == "sql":
+            run_benchmark(admin_id=admin_id, limit=limit, provider="groq")
+        elif mode == "compare":
+            compare_providers(admin_id=admin_id, limit=limit)
+        else:  # "all"
+            try:
+                run_pipeline_eval(admin_id=admin_id, limit=limit)
+            except Exception:
+                import logging
+                logging.getLogger(__name__).exception("Background pipeline routing evaluation failed")
+
+            compare_providers(admin_id=admin_id, limit=limit)
     except Exception as exc:
         import logging
         logging.getLogger(__name__).exception("Background benchmark run failed")
@@ -126,13 +149,9 @@ def _run_benchmark_in_background(admin_id: str, limit: Optional[int]) -> None:
             _benchmark_run_error = str(exc) or "Benchmark run failed unexpectedly"
     finally:
         with _benchmark_run_lock:
-            _benchmark_run_active = False
-
-
-def _require_admin(app_client: SupabaseClient, user_id: str, session_id: str) -> UserContext:
-    """Verify the caller is a real, active admin (hard gate - writes are high-stakes)."""
-    verify_role(app_client, user_id, allowed_roles=("admin",), hard=True)
-    return UserContext(user_id=user_id, role=Role.ADMIN, session_id=session_id)
+            _active_eval_modes.discard(mode)
+            if mode == "all":
+                _active_eval_modes.clear()
 
 
 @router.post("/create")
@@ -141,7 +160,7 @@ async def create_record(request: CreateRequest):
     try:
         business_client = get_supabase_client()
         app_client = get_app_db_client()
-        admin_context = _require_admin(app_client, request.user_id, request.session_id)
+        admin_context = require_admin_session(request.user_id, request.session_id)
 
         access_control = get_access_control()
         query_builder = get_admin_query_builder()
@@ -165,6 +184,13 @@ async def create_record(request: CreateRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        # A refused write (foreign key, not-null, unique, check) is the database
+        # protecting existing data, not a server fault - report it as a rejected
+        # request with an explanation the admin can act on, rather than a 500
+        # carrying raw psycopg2 output.
+        explanation = explain_database_error(e)
+        if explanation:
+            raise HTTPException(status_code=409, detail=explanation)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -174,7 +200,7 @@ async def update_record(request: UpdateRequest):
     try:
         business_client = get_supabase_client()
         app_client = get_app_db_client()
-        admin_context = _require_admin(app_client, request.user_id, request.session_id)
+        admin_context = require_admin_session(request.user_id, request.session_id)
 
         access_control = get_access_control()
         query_builder = get_admin_query_builder()
@@ -198,6 +224,13 @@ async def update_record(request: UpdateRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        # A refused write (foreign key, not-null, unique, check) is the database
+        # protecting existing data, not a server fault - report it as a rejected
+        # request with an explanation the admin can act on, rather than a 500
+        # carrying raw psycopg2 output.
+        explanation = explain_database_error(e)
+        if explanation:
+            raise HTTPException(status_code=409, detail=explanation)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -207,7 +240,7 @@ async def delete_record(request: DeleteRequest):
     try:
         business_client = get_supabase_client()
         app_client = get_app_db_client()
-        admin_context = _require_admin(app_client, request.user_id, request.session_id)
+        admin_context = require_admin_session(request.user_id, request.session_id)
 
         access_control = get_access_control()
         query_builder = get_admin_query_builder()
@@ -231,6 +264,13 @@ async def delete_record(request: DeleteRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        # A refused write (foreign key, not-null, unique, check) is the database
+        # protecting existing data, not a server fault - report it as a rejected
+        # request with an explanation the admin can act on, rather than a 500
+        # carrying raw psycopg2 output.
+        explanation = explain_database_error(e)
+        if explanation:
+            raise HTTPException(status_code=409, detail=explanation)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -240,79 +280,86 @@ async def confirm_action(request: ConfirmRequest):
     try:
         business_client = get_supabase_client()
         app_client = get_app_db_client()
-        _require_admin(app_client, request.user_id, request.session_id)
+        require_admin_session(request.user_id, request.session_id)
 
         confirmation_store = get_admin_confirmation_store(business_client, app_client)
         logger = get_monitoring_logger()
 
         executed_sql, rows, affected_count = confirmation_store.confirm(request.token)
 
-        # Automatically find and re-run the previous successful SELECT query within the session
+        # Re-run the read the admin was last looking at, or query the full table directly.
         refreshed_data = None
         try:
-            # Query the most recent assistant message with a SELECT query in this session
-            select_rows, _, _ = app_client.execute_read(
-                """
-                SELECT id, sql_generated, created_at
-                FROM chat_messages
-                WHERE session_id = %s 
-                  AND role = 'assistant' 
-                  AND sql_generated IS NOT NULL 
-                  AND (trim(sql_generated) ILIKE 'SELECT%%' OR trim(sql_generated) ILIKE 'WITH%%')
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                (request.session_id,)
-            )
-            if select_rows:
-                select_msg = select_rows[0]
-                select_sql = select_msg["sql_generated"]
-                
-                # Find the user question preceding this SELECT message
-                user_rows, _, _ = app_client.execute_read(
-                    """
-                    SELECT content
-                    FROM chat_messages
-                    WHERE session_id = %s AND role = 'user' AND created_at < %s
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                    """,
-                    (request.session_id, select_msg["created_at"])
+            previous = find_last_select(app_client, request.session_id)
+            if previous:
+                refreshed_rows, refreshed_cols, _ = get_supabase_query_executor().execute(
+                    previous["sql"]
                 )
-                user_question = user_rows[0]["content"] if user_rows else "Previous Query"
-                
-                # Execute the SELECT query against the business database
-                query_executor = get_supabase_query_executor()
-                refreshed_rows, refreshed_cols, _ = query_executor.execute(select_sql)
-                
-                # Recommend chart type
-                chart_recommender = get_chart_recommender()
-                chart_res = chart_recommender.recommend(refreshed_rows, refreshed_cols, user_question, select_sql)
-                
+                chart_res = get_chart_recommender().recommend(
+                    refreshed_rows, refreshed_cols, previous["question"], previous["sql"]
+                )
                 refreshed_data = {
-                    "question": user_question,
-                    "sql": select_sql,
+                    "question": f"Show all records for: {previous['question']}",
+                    "sql": previous["sql"],
                     "data": refreshed_rows,
                     "columns": refreshed_cols,
                     "chart_type": chart_res.chart_type
                 }
+        except Exception:
+            pass
+
+        if not refreshed_data:
+            try:
+                match = re.search(r'(?:FROM|INTO|UPDATE)\s+["`]?([a-zA-Z0-9_]+)["`]?', executed_sql, re.IGNORECASE)
+                if match:
+                    target_table = match.group(1)
+                    refreshed_rows, refreshed_cols, _ = get_supabase_query_executor().execute(
+                        f"SELECT * FROM {target_table}"
+                    )
+                    refreshed_data = {
+                        "question": f"Show all {target_table}",
+                        "sql": f"SELECT * FROM {target_table}",
+                        "data": refreshed_rows,
+                        "columns": refreshed_cols,
+                        "chart_type": "table"
+                    }
+            except Exception as e:
+                logger.log_event(
+                    event_type=EventType.SQL_EXECUTION,
+                    message=f"Failed to auto-refresh database state proof: {str(e)}",
+                    user_id=request.user_id,
+                    session_id=request.session_id,
+                    status="warning"
+                )
+
+        analytics_service.log_admin_write(request.user_id, executed_sql, affected_count)
+
+        log_query(
+            app_client,
+            user_id=request.user_id,
+            session_id=request.session_id,
+            nl_query=f"EXECUTE WRITE: {executed_sql}",
+            sql_generated=executed_sql,
+            status="success",
+            exec_time_ms=exec_time,
+            model_provider="groq"
+        )
+
+        # The write may have introduced a value the schema context doesn't
+        # mention yet (a new product category, a new city). Drop the cached
+        # schema so the next question is grounded in what the database now
+        # holds, rather than waiting out the TTL. Best-effort: the write has
+        # already succeeded, so a failure here must not fail the response.
+        try:
+            get_supabase_schema_loader().invalidate()
         except Exception as e:
             logger.log_event(
                 event_type=EventType.SQL_EXECUTION,
-                message=f"Failed to auto-refresh previous SELECT: {str(e)}",
+                message=f"Could not invalidate schema cache after write: {str(e)}",
                 user_id=request.user_id,
                 session_id=request.session_id,
                 status="warning"
             )
-
-        app_client.execute_write(
-            """
-            INSERT INTO admin_action_logs (admin_id, action_type, sql_executed, affected_rows)
-            VALUES (%s, %s, %s, %s)
-            RETURNING id
-            """,
-            (request.user_id, "confirmed_write", executed_sql, str(affected_count))
-        )
 
         logger.log_event(
             event_type=EventType.SQL_EXECUTION,
@@ -335,6 +382,13 @@ async def confirm_action(request: ConfirmRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        # A refused write (foreign key, not-null, unique, check) is the database
+        # protecting existing data, not a server fault - report it as a rejected
+        # request with an explanation the admin can act on, rather than a 500
+        # carrying raw psycopg2 output.
+        explanation = explain_database_error(e)
+        if explanation:
+            raise HTTPException(status_code=409, detail=explanation)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -350,7 +404,7 @@ async def execute_custom_query(request: SQLQueryRequest):
     try:
         business_client = get_supabase_client()
         app_client = get_app_db_client()
-        admin_context = _require_admin(app_client, request.user_id, request.session_id)
+        admin_context = require_admin_session(request.user_id, request.session_id)
 
         logger = get_monitoring_logger()
         sql_guard = get_sql_guard_rbac()
@@ -372,6 +426,15 @@ async def execute_custom_query(request: SQLQueryRequest):
                 status="success",
                 duration_ms=exec_time
             )
+            log_query(
+                app_client,
+                user_id=request.user_id,
+                session_id=request.session_id,
+                nl_query=request.sql,
+                sql_generated=request.sql,
+                status="success",
+                exec_time_ms=exec_time
+            )
 
             return {
                 "status": "success",
@@ -392,6 +455,14 @@ async def execute_custom_query(request: SQLQueryRequest):
         # substitute %-style placeholders, which misfires on a literal % in
         # e.g. a LIKE/ILIKE pattern with nothing in an empty tuple to fill it.
         proposal = confirmation_store.propose(request.user_id, request.sql, None)
+        log_query(
+            app_client,
+            user_id=request.user_id,
+            session_id=request.session_id,
+            nl_query=f"[proposed, awaiting confirmation] {request.sql}",
+            sql_generated=request.sql,
+            status="success"
+        )
 
         return {"status": "pending_confirmation", "operation": auth.get("operation"), **proposal}
 
@@ -437,7 +508,7 @@ async def admin_ask(request: AdminAskRequest):
 
     business_client = get_supabase_client()
     app_client = get_app_db_client()
-    admin_context = _require_admin(app_client, request.user_id, request.session_id)
+    admin_context = require_admin_session(request.user_id, request.session_id)
 
     logger = get_monitoring_logger()
     schema_loader = get_supabase_schema_loader()
@@ -466,17 +537,22 @@ async def admin_ask(request: AdminAskRequest):
         if last.get("role") == "assistant" and last.get("needs_clarification"):
             is_follow_up = True
 
+    is_write_req = has_write_intent(effective_question) or any(
+        kw in effective_question.lower() for kw in ["delete", "insert", "update", "hapus", "tambah", "ubah", "drop", "alter"]
+    )
+
     sql_result = sql_generator.generate(
         effective_question,
         schema_definition,
-        check_ambiguity=not is_follow_up,
+        check_ambiguity=not is_follow_up and not is_write_req,
         override_system_prompt=ADMIN_WRITE_SYSTEM_PROMPT,
-        conversation_context=conversation_context
+        conversation_context=conversation_context,
+        allow_writes=True
     )
 
     add_message(app_client, request.session_id, role="user", content=request.question)
 
-    if sql_result.is_ambiguous:
+    if sql_result.is_ambiguous and not is_write_req:
         add_message(
             app_client, request.session_id, role="assistant",
             content=sql_result.clarification_question or "", needs_clarification=True
@@ -496,10 +572,15 @@ async def admin_ask(request: AdminAskRequest):
             status="error", reject_reason=sql_result.error_message
         )
         add_message(app_client, request.session_id, role="assistant", content=sql_result.error_message or "Failed to generate SQL.")
-        raise HTTPException(status_code=422, detail=sql_result.error_message or "Failed to generate SQL")
+        return {
+            "status": "error",
+            "explanation": sql_result.error_message or "Failed to generate SQL.",
+            "model_provider": request.model_provider,
+            "model_name": model_name
+        }
 
-    sql = sql_result.sql
-    sql_upper = sql.strip().upper()
+    sql = sql_result.sql.strip().rstrip(";")
+    sql_upper = sql.upper()
 
     try:
         auth = access_control.authorize_sql(admin_context, sql)
@@ -512,23 +593,30 @@ async def admin_ask(request: AdminAskRequest):
 
             data, columns, exec_time = query_executor.execute(exec_sql)
 
-            explanation_generator = get_explanation_generator(request.model_provider)
-            chart_recommender = get_chart_recommender(request.model_provider)
-            source_attributor = get_source_attributor()
-
-            query_result = QueryResult(data=data, row_count=len(data), columns=columns, execution_time=exec_time)
-            explanation_result = explanation_generator.generate(request.question, sql, query_result)
-            chart_result = chart_recommender.recommend(data, columns, request.question, sql)
-            sources = source_attributor.build_sources(sql, data, columns)
+            # Same explain/chart/attribute/format code the user pipeline runs -
+            # admin only had to generate and authorize the SQL itself, not own
+            # a second copy of everything that happens after it.
+            answer = get_pipeline_orchestrator(request.model_provider).build_answer(
+                user_question=request.question,
+                sql=sql,
+                data=data,
+                columns=columns,
+                execution_time=exec_time,
+                conversation_context=conversation_context,
+                sql_llm_response=sql_result.llm_response,
+                sql_generation_time_ms=sql_result.generation_time_ms
+            )
 
             log_query(
                 app_client, user_id=request.user_id, session_id=request.session_id,
-                nl_query=request.question, sql_generated=sql, status="success", exec_time_ms=exec_time
+                nl_query=request.question, sql_generated=sql, status="success", exec_time_ms=exec_time,
+                model_provider=request.model_provider,
+                llm_usage=answer["metadata"]
             )
             add_message(
                 app_client, request.session_id, role="assistant",
-                content=explanation_result.explanation, sql_generated=sql,
-                result_json=data, chart_type=chart_result.chart_type
+                content=answer["explanation"], sql_generated=sql,
+                result_json=data, chart_type=answer["chart_recommendation"]["type"]
             )
             logger.log_event(
                 event_type=EventType.SQL_EXECUTION,
@@ -537,20 +625,8 @@ async def admin_ask(request: AdminAskRequest):
             )
 
             return {
-                "status": "success",
+                **answer,
                 "operation": "read",
-                "generated_sql": sql,
-                "explanation": explanation_result.explanation,
-                "chart_recommendation": {
-                    "type": chart_result.chart_type,
-                    "confidence": chart_result.confidence_score,
-                    "reason": chart_result.reason,
-                    "alternatives": chart_result.alternatives,
-                    "configuration": chart_result.configuration
-                },
-                "sources": sources,
-                "data": data,
-                "columns": columns,
                 "model_provider": request.model_provider,
                 "model_name": model_name
             }
@@ -581,6 +657,7 @@ async def admin_ask(request: AdminAskRequest):
             "status": "pending_confirmation",
             "operation": auth["operation"],
             "generated_sql": sql,
+            "sql_preview": sql,
             "model_provider": request.model_provider,
             "model_name": model_name,
             **proposal
@@ -643,7 +720,7 @@ def _run_admin_pipeline_for_provider(
 
         sql_result = sql_generator.generate(
             effective_question, schema_definition, override_system_prompt=ADMIN_WRITE_SYSTEM_PROMPT,
-            conversation_context=conversation_context
+            conversation_context=conversation_context, allow_writes=True
         )
         latency_ms = (time.time() - start) * 1000
 
@@ -681,22 +758,20 @@ def _run_admin_pipeline_for_provider(
         exec_sql = f"{sql} LIMIT {max_rows}" if max_rows and "LIMIT" not in sql.upper() else sql
         data, columns, exec_time = query_executor.execute(exec_sql)
 
-        explanation_generator = get_explanation_generator(provider)
-        chart_recommender = get_chart_recommender(provider)
-        query_result = QueryResult(data=data, row_count=len(data), columns=columns, execution_time=exec_time)
-        explanation_result = explanation_generator.generate(effective_question, sql, query_result)
-        chart_result = chart_recommender.recommend(data, columns, effective_question, sql)
+        answer = get_pipeline_orchestrator(provider).build_answer(
+            user_question=effective_question,
+            sql=sql,
+            data=data,
+            columns=columns,
+            execution_time=exec_time,
+            sql_llm_response=sql_result.llm_response,
+            sql_generation_time_ms=sql_result.generation_time_ms
+        )
 
         return AdminProviderCompareResult(
             provider=provider, model_name=model_name, status="success", operation="read",
-            generated_sql=sql, explanation=explanation_result.explanation,
-            chart_recommendation={
-                "type": chart_result.chart_type,
-                "confidence": chart_result.confidence_score,
-                "reason": chart_result.reason,
-                "alternatives": chart_result.alternatives,
-                "configuration": chart_result.configuration
-            },
+            generated_sql=sql, explanation=answer["explanation"],
+            chart_recommendation=answer["chart_recommendation"],
             data=data, columns=columns, latency_ms=(time.time() - start) * 1000
         )
     except Exception as e:
@@ -713,7 +788,7 @@ async def admin_ask_compare(request: AdminAskRequest):
     chat_history/query_logs - a side, on-demand comparison.
     """
     app_client = get_app_db_client()
-    admin_context = _require_admin(app_client, request.user_id, request.session_id)
+    admin_context = require_admin_session(request.user_id, request.session_id)
 
     schema_loader = get_supabase_schema_loader()
     query_executor = get_supabase_query_executor()
@@ -749,40 +824,8 @@ async def get_query_logs(user_id: str, limit: int = 100):
     List recent query log entries (ADMIN only) - the persisted history of
     every NL question asked through /api/user/ask and /api/admin/ask.
     """
-    app_client = get_app_db_client()
-
-    try:
-        _require_admin(app_client, user_id, "query-logs-view")
-    except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
-
-    rows, _, _ = app_client.execute_read(
-        """
-        SELECT ql.id, ql.nl_query, ql.sql_generated, ql.status, ql.reject_reason,
-               ql.exec_time_ms, ql.created_at, u.email AS user_email
-        FROM query_logs ql
-        LEFT JOIN users u ON u.id = ql.user_id
-        ORDER BY ql.created_at DESC
-        LIMIT %s
-        """,
-        (limit,)
-    )
-
-    return {
-        "logs": [
-            {
-                "id": str(row["id"]),
-                "user": row["user_email"] or "Unknown user",
-                "question": row["nl_query"],
-                "generatedSql": row["sql_generated"] or "",
-                "executionTimeMs": row["exec_time_ms"] or 0,
-                "status": "Success" if row["status"] == "success" else "Failed",
-                "timestamp": row["created_at"].isoformat(),
-                "errorDetail": row["reject_reason"]
-            }
-            for row in rows
-        ]
-    }
+    require_admin(user_id)
+    return {"logs": analytics_service.list_all_query_logs(limit)}
 
 
 @router.get("/analytics/summary")
@@ -790,46 +833,33 @@ async def get_analytics_summary(user_id: str):
     """
     Real usage analytics (ADMIN only), aggregated directly from the
     persistent `query_logs` table - query success rate, execution
-    metrics, error rate. Token usage isn't included: nothing in the
-    live request pipeline currently persists it anywhere durable (the
-    only code that computes it, `MonitoringLogger.log_llm_call`, is
-    never called, and stores events in-memory rather than in a table
-    even when it is).
+    metrics, error rate, plus per-provider token/cost/latency totals.
     """
-    app_client = get_app_db_client()
+    require_admin(user_id)
+    return analytics_service.get_summary()
 
-    try:
-        _require_admin(app_client, user_id, "analytics-view")
-    except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
 
-    totals, _, _ = app_client.execute_read(
-        """
-        SELECT
-            COUNT(*) AS total_queries,
-            COUNT(*) FILTER (WHERE status = 'success') AS successful_queries,
-            COUNT(*) FILTER (WHERE status != 'success') AS failed_queries,
-            AVG(exec_time_ms) FILTER (WHERE exec_time_ms IS NOT NULL) AS avg_execution_time_ms
-        FROM query_logs
-        """
-    )
-    row = totals[0]
-    total = row["total_queries"] or 0
+@router.get("/analytics/query-volume")
+async def get_query_volume(user_id: str, days: int = 14):
+    """
+    Real daily query volume (ADMIN only) for the dashboard trend chart,
+    aggregated from `query_logs` over the last `days` days.
+    """
+    require_admin(user_id)
+    return {"trend": analytics_service.get_query_volume(days)}
 
-    by_status, _, _ = app_client.execute_read(
-        "SELECT status, COUNT(*) AS count FROM query_logs GROUP BY status ORDER BY count DESC"
-    )
 
-    return {
-        "total_queries": total,
-        "successful_queries": row["successful_queries"] or 0,
-        "failed_queries": row["failed_queries"] or 0,
-        "success_rate": (row["successful_queries"] or 0) / total if total else 0.0,
-        "error_rate": (row["failed_queries"] or 0) / total if total else 0.0,
-        "avg_execution_time_ms": float(row["avg_execution_time_ms"] or 0),
-        "status_breakdown": by_status,
-        "token_usage_available": False
-    }
+@router.get("/query-logs/{log_id}/result")
+async def get_query_log_result(log_id: str, user_id: str):
+    """
+    Re-run a logged SELECT query (ADMIN only) so its live output can be
+    inspected. `query_logs` stores the SQL but not the result rows, so the
+    output is re-fetched on demand against the business DB in a read-only
+    session. Only SELECTs are ever re-executed - a logged write statement is
+    never re-run - and the caller is told when output isn't available.
+    """
+    require_admin(user_id)
+    return analytics_service.rerun_logged_query(log_id)
 
 
 @router.get("/benchmark-eval/latest")
@@ -840,161 +870,107 @@ async def get_latest_benchmark_eval(user_id: str):
     Never triggers a run itself, same reasoning as /pipeline-eval/latest:
     a run makes real, rate-limited LLM calls and takes minutes.
     """
-    app_client = get_app_db_client()
-
-    try:
-        _require_admin(app_client, user_id, "benchmark-eval-view")
-    except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
-
-    runs, _, _ = app_client.execute_read(
-        "SELECT id, total_questions, correct, partial, wrong, accuracy_score, run_at "
-        "FROM eval_runs ORDER BY run_at DESC LIMIT 1"
-    )
-
-    if not runs:
-        raise HTTPException(status_code=404, detail="No benchmark evaluation runs found yet. Run backend.ai.evaluation.run_benchmark first.")
-
-    run = runs[0]
-
-    results, _, _ = app_client.execute_read(
-        """
-        SELECT bq.question, er.sql_generated, er.actual_answer, er.status
-        FROM eval_results er
-        JOIN benchmark_questions bq ON bq.id = er.question_id
-        WHERE er.eval_run_id = %s
-        ORDER BY er.created_at
-        """,
-        (run["id"],)
-    )
-
-    return {
-        "eval_run_id": str(run["id"]),
-        "run_at": run["run_at"].isoformat(),
-        "total_questions": run["total_questions"],
-        "correct": run["correct"],
-        "partial": run["partial"],
-        "wrong": run["wrong"],
-        "accuracy_score": run["accuracy_score"],
-        "results": results
-    }
+    require_admin(user_id)
+    return evaluation_service.get_latest_benchmark_run()
 
 
 @router.get("/benchmark-eval/history")
 async def get_benchmark_evaluation_history(user_id: str):
     """Get history of all benchmark evaluation runs (ADMIN only)."""
-    app_client = get_app_db_client()
+    require_admin(user_id)
+    return {"history": evaluation_service.get_benchmark_history()}
 
-    try:
-        _require_admin(app_client, user_id, "benchmark-eval-history")
-    except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
 
-    runs, _, _ = app_client.execute_read(
-        "SELECT id, total_questions, correct, partial, wrong, accuracy_score, run_at "
-        "FROM eval_runs ORDER BY run_at ASC"
-    )
+@router.get("/benchmark-eval/compare")
+async def compare_benchmark_providers(user_id: str):
+    """
+    Latest benchmark run per LLM provider, side by side (ADMIN only).
 
-    history = []
-    for run in runs:
-        history.append({
-            "runId": f"RUN-{str(run['id'])[:8].upper()}",
-            "accuracy": round(run["accuracy_score"] * 100, 1),
-            "timestamp": run["run_at"].strftime("%b %d, %Y %H:%M"),
-            "avgResponseTimeMs": 1200
-        })
-
-    return {"history": history}
+    Same questions, same gold SQL, same comparator - only the model differs,
+    so accuracy, tokens, cost and latency can be read against each other.
+    """
+    require_admin(user_id)
+    return {"providers": evaluation_service.compare_providers()}
 
 
 @router.get("/benchmark-questions")
 async def list_benchmark_questions(user_id: str):
     """List active persisted cases; never returns a browser-only fixture."""
-    app_client = get_app_db_client()
-    try:
-        _require_admin(app_client, user_id, "benchmark-questions-view")
-    except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
-
-    rows, _, _ = app_client.execute_read(
-        "SELECT id, question, gold_sql, gold_answer, category, created_at "
-        "FROM benchmark_questions WHERE is_active = true ORDER BY created_at DESC"
-    )
-    return {"questions": [{**row, "id": str(row["id"]), "created_at": row["created_at"].isoformat()} for row in rows]}
+    require_admin(user_id)
+    return {"questions": evaluation_service.list_benchmark_questions()}
 
 
 @router.post("/benchmark-questions")
 async def add_benchmark_question(request: BenchmarkQuestionRequest):
     """Persist a benchmark case in the control-plane database."""
-    app_client = get_app_db_client()
-    try:
-        _require_admin(app_client, request.user_id, "benchmark-question-create")
-    except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
-
-    question = request.question.strip()
-    gold_sql = request.gold_sql.strip()
-    if not question or not gold_sql:
-        raise HTTPException(status_code=400, detail="Question and expected SQL are required")
-    if not gold_sql.upper().startswith("SELECT"):
-        raise HTTPException(status_code=400, detail="Expected SQL must be a read-only SELECT statement")
-
-    rows, _, _ = app_client.execute_write(
-        """
-        INSERT INTO benchmark_questions
-          (question, gold_sql, gold_answer, category, expected_outcome, is_active)
-        VALUES (%s, %s, %s, %s, 'success', true)
-        RETURNING id, question, gold_sql, gold_answer, category, created_at
-        """,
-        (question, gold_sql, request.gold_answer.strip(), request.category.strip() or "custom")
+    require_admin(request.user_id)
+    return evaluation_service.add_benchmark_question(
+        request.question, request.gold_sql, request.gold_answer, request.category
     )
-    row = rows[0]
-    return {"id": str(row["id"]), "question": row["question"], "gold_sql": row["gold_sql"], "gold_answer": row["gold_answer"], "category": row["category"], "created_at": row["created_at"].isoformat()}
 
 
 @router.post("/benchmark-eval/run", status_code=202)
 async def run_benchmark_evaluation(request: BenchmarkRunRequest, background_tasks: BackgroundTasks):
     """Start a real persisted evaluation run without blocking the HTTP request."""
-    global _benchmark_run_active, _benchmark_run_error
-    app_client = get_app_db_client()
-    try:
-        _require_admin(app_client, request.user_id, "benchmark-eval-run")
-    except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
+    global _benchmark_run_error
+    require_admin(request.user_id)
+    mode = request.mode or "all"
 
     with _benchmark_run_lock:
-        if _benchmark_run_active:
-            raise HTTPException(status_code=409, detail="A benchmark evaluation is already running")
-        _benchmark_run_active = True
+        if mode == "all" and len(_active_eval_modes) > 0:
+            raise HTTPException(status_code=409, detail="An evaluation run is already in progress")
+        if mode in _active_eval_modes or "all" in _active_eval_modes:
+            raise HTTPException(status_code=409, detail=f"Evaluation mode '{mode}' is already running")
+
+        _active_eval_modes.add(mode)
         _benchmark_run_error = None
+
     if request.limit is not None and request.limit < 1:
         with _benchmark_run_lock:
-            _benchmark_run_active = False
+            _active_eval_modes.discard(mode)
         raise HTTPException(status_code=400, detail="limit must be at least 1")
 
-    background_tasks.add_task(_run_benchmark_in_background, request.user_id, request.limit)
-    return {"status": "started", "message": "Benchmark evaluation started. Refresh results after it completes."}
+    background_tasks.add_task(_run_benchmark_in_background, request.user_id, request.limit, mode)
+    return {"status": "started", "message": f"Benchmark evaluation ({mode}) started. Refresh results after it completes."}
 
 
 @router.get("/benchmark-eval/status")
 async def get_benchmark_evaluation_status(user_id: str):
-    app_client = get_app_db_client()
-    try:
-        _require_admin(app_client, user_id, "benchmark-eval-status")
-    except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
+    require_admin(user_id)
     with _benchmark_run_lock:
-        return {"is_running": _benchmark_run_active, "error": _benchmark_run_error}
+        return {
+            "is_running": len(_active_eval_modes) > 0,
+            "running_modes": list(_active_eval_modes),
+            "error": _benchmark_run_error
+        }
+
+
+@router.post("/schema/refresh")
+async def refresh_schema_context(user_id: str):
+    """
+    Re-read the database schema the chatbot is grounded in (ADMIN only).
+
+    The schema context is cached, so a table, column or categorical value
+    added outside this app - a migration, or an edit in Supabase Studio - is
+    invisible to the chatbot until the cache expires. This forces it now.
+    """
+    require_admin(user_id)
+
+    loader = get_supabase_schema_loader()
+    loader.refresh_schema()
+
+    return {
+        "status": "success",
+        "tables": len(loader.get_available_tables()),
+        "message": "Schema context reloaded from the database.",
+    }
 
 
 @router.get("/capabilities")
 async def get_admin_capabilities(user_id: str):
-    """Get admin's capabilities."""
-    admin_context = UserContext(
-        user_id=user_id,
-        role=Role.ADMIN,
-        session_id="unknown"
-    )
+    """Get admin's capabilities. Was the one admin route that never checked
+    the caller's role - it built an ADMIN context out of thin air."""
+    admin_context = require_admin(user_id)
 
     access_control = get_access_control()
 

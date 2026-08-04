@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Award, RefreshCw, AlertTriangle } from "lucide-react";
+import { Award, RefreshCw, AlertTriangle, Play } from "lucide-react";
 import { evaluationApi, ApiError } from "../lib/apiClient";
 import type { BenchmarkEvalRun } from "../types/benchmark";
 import { useAuthStore } from "../store/authStore";
@@ -12,7 +12,11 @@ const STATUS_STYLE: Record<string, string> = {
   wrong: "bg-danger/10 text-danger border border-danger/20"
 };
 
-export const BenchmarkEvalPanel: React.FC<{ refreshKey?: number }> = ({ refreshKey = 0 }) => {
+export const BenchmarkEvalPanel: React.FC<{
+  refreshKey?: number;
+  onRun?: (mode: "sql") => void;
+  isRunning?: boolean;
+}> = ({ refreshKey = 0, onRun, isRunning = false }) => {
   const { user } = useAuthStore();
   const [run, setRun] = useState<BenchmarkEvalRun | null>(null);
   const [loading, setLoading] = useState(true);
@@ -53,14 +57,26 @@ export const BenchmarkEvalPanel: React.FC<{ refreshKey?: number }> = ({ refreshK
 
   return (
     <div className="bg-surface border border-border shadow-lg rounded-xl p-5 space-y-5 font-sans">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Award className="w-4 h-4 text-accent" />
-          <h3 className="text-sm font-bold text-white">Real SQL-Correctness Benchmark Results</h3>
+          <h3 className="text-sm font-bold text-text">Real SQL-Correctness Benchmark Results</h3>
         </div>
-        <span className="text-[10px] text-text-muted font-mono">
-          {run.total_questions} questions &middot; run {new Date(run.run_at).toLocaleString()}
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-[10px] text-text-muted font-mono">
+            {run.total_questions} questions &middot; run {new Date(run.run_at).toLocaleString()}
+          </span>
+          {onRun && (
+            <button
+              type="button"
+              onClick={() => onRun("sql")}
+              disabled={isRunning}
+              className="px-3 py-1.5 text-xs font-bold rounded-lg bg-accent hover:bg-accent-hover text-white flex gap-1.5 items-center disabled:opacity-50 cursor-pointer transition-colors shadow-sm"
+            >
+              <Play className="w-3 h-3" /> {isRunning ? "Running..." : "Run SQL Benchmark"}
+            </button>
+          )}
+        </div>
       </div>
       <p className="text-[11px] text-text-muted -mt-3">
         Live results from <code className="text-text-muted">run_benchmark.py</code>, scoring generated SQL against a
@@ -72,19 +88,19 @@ export const BenchmarkEvalPanel: React.FC<{ refreshKey?: number }> = ({ refreshK
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-surface-2 border border-border rounded-lg p-3">
           <span className="text-[9px] uppercase font-bold text-text-muted block">Accuracy Score</span>
-          <span className="text-lg font-extrabold text-white font-mono">{pct(run.accuracy_score)}</span>
+          <span className="text-lg font-extrabold text-text font-mono">{pct(run.accuracy_score)}</span>
         </div>
         <div className="bg-surface-2 border border-border rounded-lg p-3">
           <span className="text-[9px] uppercase font-bold text-success block">Correct</span>
-          <span className="text-lg font-extrabold text-white font-mono">{run.correct}</span>
+          <span className="text-lg font-extrabold text-text font-mono">{run.correct}</span>
         </div>
         <div className="bg-surface-2 border border-border rounded-lg p-3">
           <span className="text-[9px] uppercase font-bold text-amber-400 block">Partial</span>
-          <span className="text-lg font-extrabold text-white font-mono">{run.partial}</span>
+          <span className="text-lg font-extrabold text-text font-mono">{run.partial}</span>
         </div>
         <div className="bg-surface-2 border border-border rounded-lg p-3">
           <span className="text-[9px] uppercase font-bold text-danger block">Wrong</span>
-          <span className="text-lg font-extrabold text-white font-mono">{run.wrong}</span>
+          <span className="text-lg font-extrabold text-text font-mono">{run.wrong}</span>
         </div>
       </div>
 

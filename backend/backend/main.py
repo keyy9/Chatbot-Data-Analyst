@@ -1,6 +1,8 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
+from backend.api.services.errors import ServiceError
 from backend.api.routes.user_questions import router as user_router
 from backend.api.routes.data import router as data_router
 from backend.api.routes.admin_operations import router as admin_router
@@ -33,6 +35,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.exception_handler(ServiceError)
+async def service_error_handler(request: Request, exc: ServiceError):
+    """Render a service-layer failure as its intended HTTP response, so routes
+    don't each need a try/except to do the same translation. Covers every
+    ServiceError subclass (AuthError and friends)."""
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
 
 app.include_router(auth_router)
 app.include_router(user_router)

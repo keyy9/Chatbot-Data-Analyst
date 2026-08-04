@@ -45,9 +45,7 @@ from backend.ai.evaluation.evaluator import (
 )
 from backend.ai.monitoring.logger import (
     MonitoringLogger,
-    MonitoringEvent,
     EventType,
-    EventSeverity,
     get_monitoring_logger
 )
 
@@ -109,9 +107,7 @@ __all__ = [
     
     # Monitoring
     "MonitoringLogger",
-    "MonitoringEvent",
     "EventType",
-    "EventSeverity",
     "get_monitoring_logger",
 ]
 

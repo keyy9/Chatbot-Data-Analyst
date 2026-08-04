@@ -8,7 +8,10 @@ export interface ManagedUser {
   successfulQueries: number;
   failedQueries: number;
   successRate: number;
+  /** Human-readable form of `lastActiveAt`, or "Never". Display only. */
   lastActive: string;
+  /** Raw ISO timestamp - sort and compare on this, never on `lastActive`. */
+  lastActiveAt: string | null;
   createdAt: string;
 }
 

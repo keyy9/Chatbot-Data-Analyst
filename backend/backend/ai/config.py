@@ -44,6 +44,14 @@ class Settings(BaseSettings):
     )
     database_schema: str = Field(default="public", alias="DATABASE_SCHEMA")
 
+    # How long the introspected schema (tables, columns, categorical values)
+    # stays cached before it is re-read. This is the context the LLM is
+    # grounded in, so a stale cache means new tables, columns and values are
+    # invisible to the chatbot - it cannot write SQL for a column it was never
+    # told about. Low enough that schema changes appear on their own; high
+    # enough that introspection isn't re-run on every question.
+    schema_cache_ttl_seconds: int = Field(default=300, alias="SCHEMA_CACHE_TTL_SECONDS")
+
     # The app's own control-plane database - users, chat history, query
     # logs, system prompts, benchmark/eval tables, admin audit logs. A
     # separate Supabase project from the business database above.

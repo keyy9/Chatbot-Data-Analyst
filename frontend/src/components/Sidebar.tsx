@@ -16,7 +16,6 @@ interface SidebarProps {
   sidebarCollapsed: boolean;
   setSidebarCollapsed: (collapsed: boolean) => void;
   theme: "dark" | "light";
-  isTesting: boolean;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -24,7 +23,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setActiveTab,
   sidebarCollapsed,
   setSidebarCollapsed,
-  isTesting,
 }) => {
   const [width, setWidth] = React.useState(() => {
     const saved = localStorage.getItem("admin_sidebar_width");
@@ -68,8 +66,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside
-      className={`flex flex-col justify-between border-r border-border bg-bg-elevated text-text z-20 relative ${
-        isDragging ? "" : "transition-all duration-300"
+      className={`h-screen flex-shrink-0 flex flex-col border-r border-border bg-bg-elevated text-text z-20 relative ${
+        isDragging ? "" : "transition-[width] duration-300"
       }`}
       style={{ width: `${currentWidth}px` }}
     >
@@ -82,7 +80,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           title="Drag to resize sidebar"
         />
       )}
-      <div>
+      <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin">
         {/* Logo Brand area - click to collapse/expand the sidebar */}
         <button
           type="button"
@@ -115,7 +113,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {/* Dashboard Section */}
           <div>
             {!sidebarCollapsed && (
-              <p className="px-3 text-[9px] font-bold text-text-faint uppercase tracking-widest mb-2 font-mono">
+              <p className="px-3 text-[11px] font-bold text-text-muted uppercase tracking-widest mb-2 font-mono">
                 Main
               </p>
             )}
@@ -132,7 +130,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {/* Monitoring Section */}
           <div>
             {!sidebarCollapsed && (
-              <p className="px-3 text-[9px] font-bold text-text-faint uppercase tracking-widest mb-2 font-mono">
+              <p className="px-3 text-[11px] font-bold text-text-muted uppercase tracking-widest mb-2 font-mono">
                 Monitoring
               </p>
             )}
@@ -169,7 +167,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {/* Evaluation Section */}
           <div>
             {!sidebarCollapsed && (
-              <p className="px-3 text-[9px] font-bold text-text-faint uppercase tracking-widest mb-2 font-mono">
+              <p className="px-3 text-[11px] font-bold text-text-muted uppercase tracking-widest mb-2 font-mono">
                 Evaluation
               </p>
             )}
@@ -180,16 +178,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             >
               <Award className="w-5 h-5 flex-shrink-0" />
               {!sidebarCollapsed && <span className="font-sans">Benchmark</span>}
-              {isTesting && (
-                <span className="absolute right-2 top-3.5 w-2 h-2 bg-accent rounded-full animate-ping"></span>
-              )}
             </button>
           </div>
 
           {/* Admin Section */}
           <div>
             {!sidebarCollapsed && (
-              <p className="px-3 text-[9px] font-bold text-text-faint uppercase tracking-widest mb-2 font-mono">
+              <p className="px-3 text-[11px] font-bold text-text-muted uppercase tracking-widest mb-2 font-mono">
                 Admin
               </p>
             )}

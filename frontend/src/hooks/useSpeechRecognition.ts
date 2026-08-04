@@ -33,7 +33,7 @@ const getRecognitionCtor = (): (new () => SpeechRecognitionLike) | null => {
  * fully client-side (Chrome/Edge/Safari route it through their own
  * speech service; Firefox has no implementation, hence isSupported).
  */
-export function useSpeechRecognition({ onResult, lang = "en-US" }: UseSpeechRecognitionOptions = {}) {
+export function useSpeechRecognition({ onResult, lang = "id-ID" }: UseSpeechRecognitionOptions = {}) {
   const isSupported = getRecognitionCtor() !== null;
   const [isListening, setIsListening] = useState(false);
   const [interimTranscript, setInterimTranscript] = useState("");

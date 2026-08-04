@@ -2,13 +2,15 @@ import React from "react";
 import { TrendingUp, DollarSign, Users, Activity } from "lucide-react";
 import { useChatStore } from "../../store/chatStore";
 import { useSessionStore } from "../../store/sessionStore";
-import { useProfileStore } from "../../store/profileStore";
+import { useAuthStore } from "../../store/authStore";
 import logoImg from "../../assets/logo.png";
 
 export const ChatWelcome: React.FC = () => {
   const { submitUserQuery } = useChatStore();
   const { activeSessionId } = useSessionStore();
-  const { profile } = useProfileStore();
+  const user = useAuthStore((s) => s.user);
+  // Real signed-in identity, not a stored display name that could drift.
+  const greetingName = user?.username || user?.email?.split("@")[0] || "there";
 
   const suggestions = [
     {
@@ -49,7 +51,7 @@ export const ChatWelcome: React.FC = () => {
       {/* Greeting text */}
       <div className="space-y-1.5">
         <h2 className="text-2xl font-extrabold text-text">
-          Welcome, {profile.name}!
+          Welcome, {greetingName}!
         </h2>
         <p className="text-xs sm:text-sm text-text-muted leading-relaxed max-w-lg mx-auto">
           I am your natural language database assistant. Ask me questions about our products, customers, and sales orders, and I will compile safe read-only SQL reports.

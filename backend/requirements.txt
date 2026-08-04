@@ -3,7 +3,11 @@ uvicorn[standard]>=0.30
 pydantic>=2.9
 pydantic-settings>=2.5
 python-dotenv>=1.0
-groq>=1.0
+# LLM access. Both Groq and Gemini are called through LangChain's ChatOpenAI
+# pointed at each provider's OpenAI-compatible gateway (see ai/llm/client.py).
+# langchain-core is declared explicitly because client.py imports it directly.
+langchain-openai>=1.3
+langchain-core>=1.4
 httpx>=0.27
 psycopg2-binary>=2.9
 supabase>=2.9

@@ -55,8 +55,9 @@ Your ONLY task is to convert natural language questions into valid PostgreSQL SQ
 9. **Monetary Values**: All monetary values in the database are stored as raw numbers in IDR (Indonesian Rupiah). Do not divide, scale, or perform currency conversions unless explicitly requested.
 
 ## CONVERSATION MEMORY & MULTI-TURN CONTEXT:
-- You will be provided with a "RECENT CONVERSATION HISTORY" block. Use this history to resolve pronouns (e.g. "it", "them", "those", "their"), implicit entities, and follow-up requests.
+- You will be provided with a "RECENT CONVERSATION HISTORY" block. Use this history to resolve pronouns (e.g. "it", "them", "those", "their"), implicit entities, active filters, and follow-up requests.
 - Maintain context naturally throughout the conversation. Do not treat every message as a completely new request.
+- **STATEFUL FILTER RETENTION**: When the user asks a follow-up question (e.g. "who bought those?", "what about in Jakarta?", "show top 5 of those"), PRESERVE the existing active WHERE filter conditions (e.g., date ranges, product categories, status filters, or price thresholds) from previous queries in the conversation history, unless the user explicitly requests to change or clear them.
 - If the user asks for a refinement (e.g. "only completed ones", "filter by electronics", "show their names"), modify the previous SQL query by appending or modifying its clauses rather than writing a completely new query from scratch.
 - Do not carry over previous filters if the user starts a completely new topic or asks an unrelated question.
 
@@ -73,6 +74,36 @@ Your ONLY task is to convert natural language questions into valid PostgreSQL SQ
 - Use clear output aliases (for example `total_revenue`, `order_count`) and avoid returning internal IDs unless the user asks for them
 - Do not silently add a date filter or a LIMIT that the user did not request. Ask for clarification upstream when the period matters.
 - Use CASE statements for conditional logic
+
+## ANSWER SHAPE (these decide whether the answer is usable):
+
+1. **Always return the measure next to the label.** For "which/what X has the most/least/highest/lowest Y",
+   select BOTH the identifying column AND the number that ranks it. `SELECT category` answers "which",
+   but the reader cannot see *how many*, so the answer is incomplete.
+   - Wrong: `SELECT category FROM products GROUP BY category ORDER BY COUNT(*) DESC LIMIT 1`
+   - Right: `SELECT category, COUNT(*) AS product_count FROM products GROUP BY category ORDER BY product_count DESC LIMIT 1`
+
+2. **Round averages and money.** Wrap AVG in ROUND - `ROUND(AVG(x), 2)` for prices and rates,
+   `ROUND(AVG(x))` for whole currency amounts. A raw `AVG` returns a value like 301477.611940298507,
+   which is noise, not an answer.
+
+3. **Always ORDER BY when you GROUP BY.** A grouped result without ORDER BY comes back in an arbitrary
+   order. Order by the measure (DESC) when the question is about ranking, or by the label when the
+   question asks for a plain breakdown ("per tier", "in each city").
+
+4. **Map status words in the question to status filters.** These are real column values, not adjectives:
+   - "paid" / "paid payments" → `payments.status = 'paid'`
+   - "completed" / "completed orders" → `orders.status = 'completed'`
+   - "refunded" / "cancelled" → the matching `status` value
+   Omitting the filter silently answers a different question than the one asked.
+
+5. **Never select a column from a table you did not join.** Category lives on `products`, so revenue per
+   category has to reach `products` through `order_items` - `order_items` alone has no category.
+
+6. **String comparisons are case-sensitive in PostgreSQL.** `city = 'jakarta'` matches nothing when the
+   stored value is `'Jakarta'`. Copy the exact casing from the schema's "Example values" list. That list
+   is a sample, so a value you need may be missing from it - when it is, keep the casing the user wrote
+   (place and person names are capitalised).
 
 ## COMMON PATTERNS:
 
@@ -108,31 +139,37 @@ The available tables and columns are:
 - Use schema.table notation where necessary"""
 
     # ============ Few-Shot Examples ============
+    # Every example below is a runnable query against THIS database. They exist
+    # to demonstrate the four things generated SQL most often gets wrong:
+    # label+measure projection, ROUND on averages, status filters, and reaching
+    # a column through the right join. An example that references a column the
+    # schema doesn't have teaches the model to invent columns, so keep these in
+    # sync with the schema whenever it changes.
     EXAMPLES = [
         {
-            "user_question": "Show products with stock below 20",
-            "sql": "SELECT product_id, product_name, stock_quantity FROM products WHERE stock_quantity < 20 ORDER BY stock_quantity ASC;",
-            "explanation": "Simple WHERE clause filtering"
+            "user_question": "Which category has the most products?",
+            "sql": "SELECT category, COUNT(*) AS product_count FROM products GROUP BY category ORDER BY product_count DESC LIMIT 1;",
+            "explanation": "Ranking: return the label AND the measure that ranks it"
         },
         {
-            "user_question": "Total sales this month",
-            "sql": "SELECT SUM(amount) as total_sales FROM orders WHERE EXTRACT(MONTH FROM order_date) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM order_date) = EXTRACT(YEAR FROM CURRENT_DATE);",
-            "explanation": "Aggregation with date filtering"
+            "user_question": "Which 5 product categories generated the most revenue from completed orders?",
+            "sql": "SELECT p.category, SUM(oi.line_total) AS total_revenue FROM order_items oi INNER JOIN orders o ON oi.order_id = o.order_id INNER JOIN products p ON oi.product_id = p.product_id WHERE o.status = 'completed' GROUP BY p.category ORDER BY total_revenue DESC LIMIT 5;",
+            "explanation": "Category lives on products, so revenue reaches it through order_items"
         },
         {
-            "user_question": "Who is the top customer",
-            "sql": "SELECT customer_id, customer_name, SUM(amount) as total_spent FROM orders GROUP BY customer_id, customer_name ORDER BY total_spent DESC LIMIT 1;",
-            "explanation": "GROUP BY with aggregation and LIMIT"
+            "user_question": "What is the average order total for completed orders?",
+            "sql": "SELECT ROUND(AVG(order_total)) AS average_order_total FROM orders WHERE status = 'completed';",
+            "explanation": "Average is rounded, and 'completed' becomes a status filter"
         },
         {
-            "user_question": "Revenue by category",
-            "sql": "SELECT p.category, SUM(o.amount) as revenue FROM orders o INNER JOIN products p ON o.product_id = p.product_id GROUP BY p.category ORDER BY revenue DESC;",
-            "explanation": "JOIN with GROUP BY aggregation"
+            "user_question": "What is the total amount paid via virtual account?",
+            "sql": "SELECT SUM(amount) AS total_paid FROM payments WHERE method = 'virtual_account' AND status = 'paid';",
+            "explanation": "Both the method and the 'paid' status must be filtered"
         },
         {
-            "user_question": "Compare sales between January and February",
-            "sql": "SELECT EXTRACT(MONTH FROM order_date) as month, SUM(amount) as total_sales FROM orders WHERE EXTRACT(MONTH FROM order_date) IN (1, 2) AND EXTRACT(YEAR FROM order_date) = EXTRACT(YEAR FROM CURRENT_DATE) GROUP BY EXTRACT(MONTH FROM order_date) ORDER BY month;",
-            "explanation": "Date filtering with GROUP BY for comparison"
+            "user_question": "How many customers are in each tier?",
+            "sql": "SELECT tier, COUNT(*) AS customer_count FROM customers GROUP BY tier ORDER BY tier;",
+            "explanation": "A plain breakdown is ordered by the label so the output is stable"
         }
     ]
 
@@ -193,20 +230,44 @@ SQL: {example['sql']}
         
         return examples_text
 
-    def build_user_prompt(self, user_question: str, conversation_context: str = "") -> str:
+    def build_user_prompt(
+        self,
+        user_question: str,
+        conversation_context: str = "",
+        allow_writes: bool = False
+    ) -> str:
         """
         Build the user prompt for a specific question.
-        
+
         Args:
-            user_question (str): The user's natural language question.
-            
+            user_question: The user's natural language question.
+            conversation_context: Prior turns, when this is a follow-up.
+            allow_writes: True on the admin path, where INSERT/UPDATE/DELETE
+                are permitted.
+
         Returns:
             str: Formatted user prompt ready for LLM.
+
+        Note:
+            The closing line is the last thing the model reads, so it carries
+            more weight than anything earlier. It used to say "Return only the
+            PostgreSQL SELECT query" unconditionally - including for admin write
+            requests, whose system prompt says the opposite. The model followed
+            the closing line, so "delete the customer named X" came back as a
+            SELECT: no error, no confirmation prompt, nothing deleted.
         """
         context = f"\n\n{conversation_context}" if conversation_context else ""
+
+        closing = (
+            "Return only the PostgreSQL statement. If the request asks to change, "
+            "add, or remove data, return an INSERT, UPDATE or DELETE - never a SELECT."
+            if allow_writes
+            else "Return only the PostgreSQL SELECT query."
+        )
+
         return (
             "Current user request (this is the request you must answer):\n"
-            f"{user_question}{context}\n\nReturn only the PostgreSQL SELECT query."
+            f"{user_question}{context}\n\n{closing}"
         )
 
     def build_complete_prompt(
@@ -216,7 +277,8 @@ SQL: {example['sql']}
         include_examples: bool = False,
         num_examples: int = 3,
         override_system_prompt: Optional[str] = None,
-        conversation_context: str = ""
+        conversation_context: str = "",
+        allow_writes: bool = False
     ) -> Dict[str, str]:
         """
         Build a complete prompt with all components.
@@ -257,7 +319,7 @@ SQL: {example['sql']}
             examples = self.build_few_shot_examples(num_examples)
             full_system = f"{full_system}\n\n{examples}"
         
-        user_prompt = self.build_user_prompt(user_question, conversation_context)
+        user_prompt = self.build_user_prompt(user_question, conversation_context, allow_writes)
         
         return {
             "system": full_system,

@@ -8,6 +8,7 @@ interface AuthState {
   pendingOtpUserId: string | null;
   login: (email: string, password: string, remember: boolean) => Promise<{ success: boolean; requiresOtp?: boolean; role?: "user" | "admin"; error?: string }>;
   verifyOtp: (otpCode: string) => Promise<{ success: boolean; role?: "user" | "admin"; error?: string }>;
+  resendOtp: () => Promise<{ success: boolean; message?: string; error?: string }>;
   requestPasswordReset: (email: string) => Promise<{ success: boolean; message?: string; error?: string }>;
   logout: () => void;
   initialize: () => void;
@@ -75,6 +76,20 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
+  resendOtp: async () => {
+    const { pendingOtpUserId } = get();
+    if (!pendingOtpUserId) {
+      return { success: false, error: "No login in progress. Please log in again." };
+    }
+    try {
+      const res = await authApi.resendOtp(pendingOtpUserId);
+      return { success: true, message: res.message };
+    } catch (e) {
+      const message = e instanceof ApiError ? e.message : "Failed to resend OTP. Please try again.";
+      return { success: false, error: message };
+    }
+  },
+
   requestPasswordReset: async (email) => {
     try {
       const res = await authApi.forgotPassword(email);
@@ -100,7 +115,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ user: null, pendingOtpUserId: null });
     localStorage.removeItem("user_session");
     sessionStorage.removeItem("user_session");
-    localStorage.removeItem("admin_authenticated");
   },
 
   initialize: () => {

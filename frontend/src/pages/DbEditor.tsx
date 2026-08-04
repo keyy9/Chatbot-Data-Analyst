@@ -1,25 +1,33 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Database, RefreshCw, Search, AlertTriangle } from "lucide-react";
-import { adminApi, ApiError } from "../lib/apiClient";
+import { adminApi, dataApi, ApiError } from "../lib/apiClient";
 
 interface DbEditorProps {
   userId: string;
   sessionId: string;
 }
 
-const TABLES = ["products", "customers", "orders"] as const;
-
 /** Displays rows returned by the business database. Writes remain in Admin Chat,
  * where they require the existing explicit confirmation flow. */
 export const DbEditor: React.FC<DbEditorProps> = ({ userId, sessionId }) => {
-  const [table, setTable] = useState<(typeof TABLES)[number]>("products");
+  const [tables, setTables] = useState<string[]>([]);
+  const [table, setTable] = useState<string>("");
   const [rows, setRows] = useState<Record<string, unknown>[]>([]);
   const [columns, setColumns] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    dataApi.getTables().then((res) => {
+      const names = Object.keys(res.tables);
+      setTables(names);
+      setTable((current) => current || names[0] || "");
+    }).catch(() => setError("Failed to load table list."));
+  }, []);
+
   const loadRows = useCallback(async () => {
+    if (!table) return;
     setLoading(true);
     setError(null);
     try {
@@ -51,8 +59,8 @@ export const DbEditor: React.FC<DbEditorProps> = ({ userId, sessionId }) => {
           <div><h2 className="text-sm font-bold">Business Database</h2><p className="text-xs text-text-muted">Live rows from the connected database (up to 100 rows).</p></div>
         </div>
         <div className="flex gap-2">
-          <select value={table} onChange={(e) => setTable(e.target.value as typeof table)} className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-xs font-bold">
-            {TABLES.map((name) => <option key={name} value={name}>{name}</option>)}
+          <select value={table} onChange={(e) => setTable(e.target.value)} className="bg-surface-2 border border-border rounded-lg px-3 py-2 text-xs font-bold">
+            {tables.map((name) => <option key={name} value={name}>{name}</option>)}
           </select>
           <button type="button" onClick={loadRows} disabled={loading} className="bg-accent text-white rounded-lg px-3 py-2 text-xs font-bold flex gap-1.5 items-center disabled:opacity-60"><RefreshCw className={loading ? "w-3.5 h-3.5 animate-spin" : "w-3.5 h-3.5"} /> Refresh</button>
         </div>

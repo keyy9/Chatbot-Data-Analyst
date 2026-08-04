@@ -123,12 +123,14 @@ export async function exportResultAsPdf(params: PdfExportParams): Promise<void> 
     }
   };
 
-  // ============ Title ============
+  // ============ Executive Header Banner ============
+  pdf.setFillColor(15, 23, 42); // Slate dark banner
+  pdf.rect(margin, y, pageWidth - margin * 2, 40, "F");
   pdf.setFont("helvetica", "bold");
-  pdf.setFontSize(16);
-  pdf.setTextColor(0);
-  pdf.text("Lapis AI - Query Report", margin, y);
-  y += 26;
+  pdf.setFontSize(14);
+  pdf.setTextColor(255, 255, 255);
+  pdf.text("LAPIS ANALYTICS - EXECUTIVE BRIEFING REPORT", margin + 12, y + 25);
+  y += 54;
 
   // ============ Question ============
   writeSectionHeading("Question");

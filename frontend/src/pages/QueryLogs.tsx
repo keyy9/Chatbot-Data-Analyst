@@ -1,10 +1,12 @@
 import React, { useState, useMemo } from "react";
-import { Search, FileSearch, ChevronLeft, ChevronRight } from "lucide-react";
+import { Search, FileSearch, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 import type { QueryLog } from "../types/query";
+import { queryLogAuthor } from "../lib/userMapping";
 
 interface QueryLogsProps {
   queryLogs: QueryLog[];
   setSelectedLog: (log: QueryLog) => void;
+  onRefreshLogs?: () => void;
 }
 
 const logsPerPage = 8;
@@ -12,7 +14,7 @@ const logsPerPage = 8;
 const matchesDate = (timestampStr: string, filter: string) => {
   if (filter === "All") return true;
   const date = new Date(timestampStr);
-  const now = new Date("2026-06-26T20:32:16+07:00"); // Fictional current time
+  const now = new Date();
   const diffTime = Math.abs(now.getTime() - date.getTime());
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
@@ -25,27 +27,43 @@ const matchesDate = (timestampStr: string, filter: string) => {
 export const QueryLogs: React.FC<QueryLogsProps> = ({
   queryLogs,
   setSelectedLog,
+  onRefreshLogs,
 }) => {
   const [logSearch, setLogSearch] = useState("");
   const [logStatusFilter, setLogStatusFilter] = useState<"All" | "Success" | "Failed">("All");
+  const [logRoleFilter, setLogRoleFilter] = useState<"All" | "Admin" | "User">("All");
   const [logDateFilter, setLogDateFilter] = useState<"All" | "Today" | "7days" | "30days">("All");
   const [logCurrentPage, setLogCurrentPage] = useState(1);
 
   // Query logs filtering logic
   const filteredLogs = useMemo(() => {
     return queryLogs.filter((log) => {
-      const matchesSearch =
-        log.question.toLowerCase().includes(logSearch.toLowerCase()) ||
-        log.user.toLowerCase().includes(logSearch.toLowerCase()) ||
-        log.generatedSql.toLowerCase().includes(logSearch.toLowerCase());
+      const q = (log.question || "").toLowerCase();
+      const u = (log.user || "").toLowerCase();
+      const sql = (log.generatedSql || "").toLowerCase();
+      const search = (logSearch || "").toLowerCase();
+
+      const matchesSearch = q.includes(search) || u.includes(search) || sql.includes(search);
 
       const matchesStatus =
         logStatusFilter === "All" || log.status === logStatusFilter;
-      const matchesDateFilter = matchesDate(log.timestamp, logDateFilter);
 
-      return matchesSearch && matchesStatus && matchesDateFilter;
+      const userLower = (log.user || "").toLowerCase();
+      const emailLower = (log.userEmail || "").toLowerCase();
+      const isAdmin = userLower.includes("admin") || emailLower.includes("admin");
+
+      const matchesRole =
+        logRoleFilter === "All"
+          ? true
+          : logRoleFilter === "Admin"
+          ? isAdmin
+          : !isAdmin;
+
+      const matchesDateFilter = matchesDate(log.timestamp || "", logDateFilter);
+
+      return matchesSearch && matchesStatus && matchesRole && matchesDateFilter;
     });
-  }, [queryLogs, logSearch, logStatusFilter, logDateFilter]);
+  }, [queryLogs, logSearch, logStatusFilter, logRoleFilter, logDateFilter]);
 
   // Paginated logs
   const paginatedLogs = useMemo(() => {
@@ -76,7 +94,34 @@ export const QueryLogs: React.FC<QueryLogsProps> = ({
               className="w-full bg-surface-hover border border-border text-slate-100 placeholder:text-text-faint focus:ring-2 focus:ring-accent focus:border-accent pl-9 pr-4 py-2 rounded-lg text-sm focus:outline-none transition-all placeholder:text-xs font-sans"
             />
           </div>
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Refresh Button */}
+            {onRefreshLogs && (
+              <button
+                type="button"
+                onClick={onRefreshLogs}
+                className="px-3 py-2 bg-surface-hover hover:bg-surface-2 text-text hover:text-accent border border-border rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer font-sans active:scale-95 shadow-sm"
+                title="Refresh query logs history"
+              >
+                <RefreshCw className="w-3.5 h-3.5 text-accent" />
+                <span>Refresh Logs</span>
+              </button>
+            )}
+
+            {/* Role Author Filter */}
+            <select
+              value={logRoleFilter}
+              onChange={(e) => {
+                setLogRoleFilter(e.target.value as any);
+                setLogCurrentPage(1);
+              }}
+              className="bg-surface-hover text-xs font-bold px-3 py-2 border border-border rounded-lg text-text focus:outline-none focus:ring-2 focus:ring-accent cursor-pointer font-sans"
+            >
+              <option value="All">All Authors (Users & Admins)</option>
+              <option value="Admin">Admin Actions Only 🛡️</option>
+              <option value="User">Standard Users Only 👤</option>
+            </select>
+
             {/* Status Filter */}
             <select
               value={logStatusFilter}
@@ -109,12 +154,14 @@ export const QueryLogs: React.FC<QueryLogsProps> = ({
             {/* Reset filter button */}
             {(logSearch ||
               logStatusFilter !== "All" ||
+              logRoleFilter !== "All" ||
               logDateFilter !== "All") && (
               <button
                 type="button"
                 onClick={() => {
                   setLogSearch("");
                   setLogStatusFilter("All");
+                  setLogRoleFilter("All");
                   setLogDateFilter("All");
                   setLogCurrentPage(1);
                 }}
@@ -163,8 +210,12 @@ export const QueryLogs: React.FC<QueryLogsProps> = ({
                   onClick={() => setSelectedLog(log)}
                   className="hover:bg-surface-hover/40 cursor-pointer transition-colors group"
                 >
-                  <td className="py-3 px-5 font-bold text-text font-sans">
-                    {log.user}
+                  <td
+                    className={`py-3 px-5 font-bold font-sans ${
+                      log.userDeleted ? "text-text-faint italic" : "text-text"
+                    }`}
+                  >
+                    {queryLogAuthor(log)}
                   </td>
                   <td className="py-3 px-5 max-w-xs truncate text-text-muted font-medium font-sans">
                     {log.question}

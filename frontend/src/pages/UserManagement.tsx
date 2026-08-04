@@ -114,17 +114,17 @@ export const UserManagement: React.FC<UserManagementProps> = ({
     }
 
     if (userMgmtSortCol !== "none") {
+      const direction = userMgmtSortOrder === "asc" ? 1 : -1;
       list.sort((a, b) => {
-        let valA: any = a[userMgmtSortCol];
-        let valB: any = b[userMgmtSortCol];
-
-        if (typeof valA === "string") {
-          return userMgmtSortOrder === "asc"
-            ? valA.localeCompare(valB)
-            : valB.localeCompare(valA);
-        } else {
-          return userMgmtSortOrder === "asc" ? valA - valB : valB - valA;
+        if (userMgmtSortCol === "lastActive") {
+          // Compare raw timestamps: the rendered `lastActive` is a localised
+          // string ("7/26/2026, 12:49:00 PM") and does not sort
+          // chronologically. Never-active users count as the oldest.
+          const timeA = a.lastActiveAt ? new Date(a.lastActiveAt).getTime() : 0;
+          const timeB = b.lastActiveAt ? new Date(b.lastActiveAt).getTime() : 0;
+          return (timeA - timeB) * direction;
         }
+        return a.username.localeCompare(b.username) * direction;
       });
     }
 

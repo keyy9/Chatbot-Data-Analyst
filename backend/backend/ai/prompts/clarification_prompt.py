@@ -5,9 +5,22 @@ Handles detection and generation of clarifying questions when user input is ambi
 Prevents invalid SQL generation by asking for clarification upfront.
 """
 
+import re
 from typing import List, Dict, Optional
 from dataclasses import dataclass
 from enum import Enum
+
+# Phrases that make a question self-specifying: a superlative names the ranking,
+# and "per/each <thing>" names the grouping. Either way there is nothing left to
+# ask the user. Word-boundary matched so "almost" is not read as "most".
+RANKING_PHRASE_PATTERN = (
+    r"\b("
+    r"most|least|fewest|largest|smallest|biggest|greatest|"
+    r"best[- ]selling|worst|cheapest|most expensive|"
+    r"per|each|"
+    r"top \d+|bottom \d+|first \d+|last \d+"
+    r")\b"
+)
 
 
 class AmbiguityType(Enum):
@@ -55,19 +68,54 @@ class ClarificationPromptManager:
     """
 
     # ============ Ambiguity Detection System Prompt ============
-    DETECTION_SYSTEM_PROMPT = """You are an expert at detecting ambiguous or unclear requests in natural language.
+    DETECTION_SYSTEM_PROMPT = """You are a gatekeeper that decides whether a data question can be answered as asked.
 
-Your task is to analyze a user question and determine if it needs clarification before SQL can be generated.
+**The default answer is NO, it is not ambiguous.** Interrupting someone to ask a
+question they already answered is worse than running a reasonable query. Only
+flag a question when you genuinely cannot pick a query without guessing.
 
-## AMBIGUITY TYPES TO DETECT:
+## THE BAR FOR FLAGGING
 
-1. **TIME_PERIOD**: Question mentions a metric without specifying when (e.g., "Show sales" without today/week/month/year)
-2. **ENTITY_SELECTION**: Question refers to an entity without specifying which one (e.g., "Show customer purchases" without naming a customer)
-3. **AGGREGATION_TYPE**: Question is vague about how to aggregate (e.g., "Total revenue" could mean SUM or COUNT)
-4. **DATE_RANGE**: Question uses relative dates that need clarification (e.g., "recent", "last period")
-5. **COLUMN_AMBIGUITY**: Multiple columns could match the description (e.g., "price" could be unit_price or total_price)
-6. **METRIC_AMBIGUITY**: A metric name is ambiguous (e.g., "revenue" from sales or refunds)
-7. **COMPARISON_PERIOD**: Comparison lacks specification (e.g., "Compare sales" without comparing to what/when)
+Flag ONLY if BOTH are true:
+1. Two different reasonable queries would return materially different answers, AND
+2. You cannot tell which one the user meant.
+
+If a sensible default exists, use it and do NOT flag. In particular:
+- **No time period mentioned = all time.** That is a complete, valid scope, not a
+  missing detail. Never ask "which time period?" just because none was given.
+- **"Total"/"how much" on an amount = SUM. "How many" = COUNT.** These are not ambiguous.
+- **A named filter is a specification.** "Gold-tier customers", "completed orders",
+  "paid payments" all name exact values - nothing left to ask.
+- **A superlative names the ranking.** "most", "highest", "top 5", "cheapest" say
+  exactly what to sort by.
+- **"per X" / "in each X" names the grouping.**
+
+## DO NOT FLAG THESE (all are answerable as written)
+
+- "How many customers are there in total?"
+- "Which city has the most customers?"
+- "What is the most popular payment method among paid payments?"
+- "How much revenue came from Gold-tier customers (completed payments)?"
+- "What is the average product price?"
+- "How many customers are in each tier?"
+- "Which 5 product categories generated the most revenue from completed orders?"
+
+## DO FLAG THESE (genuinely unanswerable)
+
+- "Show me the customer" - which customer? no way to choose one.
+- "Compare sales" - compare what against what?
+- "How did we do recently?" - no metric and no period.
+- "Show the price" - price of what?
+
+## AMBIGUITY TYPES (only when the bar above is met):
+
+1. **TIME_PERIOD**: a relative period is named but undefined ("recently", "last period")
+2. **ENTITY_SELECTION**: a single unnamed entity is required to answer
+3. **AGGREGATION_TYPE**: the metric could be summed or counted with different meanings
+4. **DATE_RANGE**: a relative date phrase that needs a concrete range
+5. **COLUMN_AMBIGUITY**: two columns match the wording and give different answers
+6. **METRIC_AMBIGUITY**: the metric maps to two different measures
+7. **COMPARISON_PERIOD**: a comparison is asked without both sides
 
 ## YOUR RESPONSE FORMAT:
 
@@ -89,7 +137,7 @@ If the question is clear and unambiguous, return:
     "clarification_needed": null
 }
 
-Be conservative: Only flag as ambiguous if there's genuine uncertainty."""
+When in doubt, answer the question. A reasonable default beats an interruption."""
 
     # ============ Clarification Generation Prompt ============
     GENERATION_SYSTEM_PROMPT = """You are an expert at generating helpful clarification questions.
@@ -217,7 +265,8 @@ Return a JSON object:
         # Immediate bypass for clear read operations and general listing commands
         clear_read_indicators = [
             "show all", "list all", "display all", "get all", "select all",
-            "how many", "count", "total", "sum", "average", "avg", "mean",
+            "how many", "how much", "how long", "how often",
+            "count", "total", "sum", "average", "avg", "mean",
             "max", "min", "highest", "lowest", "top ", "bottom ",
             "breakdown", "group by", "catalog", "logs", "activity", "benchmark",
             "show products", "list products", "show customers", "list customers",
@@ -231,6 +280,24 @@ Return a JSON object:
                 "confidence_score": 1.0,
                 "ambiguity_type": AmbiguityType.UNKNOWN,
                 "explanation": "Question is a clear read/aggregation command, bypassing ambiguity check.",
+                "clarification_needed": None
+            }
+
+        # A superlative or per-group question already says exactly what to
+        # compute ("which city has the most customers" needs no clarification),
+        # so it bypasses the check too. The substring list above missed these
+        # because it carries "highest"/"lowest" but not "most"/"least", which
+        # sent plainly answerable questions to the LLM check - and that check
+        # kept flagging them, so the user got "Which specific item would you
+        # like to analyze?" instead of an answer.
+        #
+        # Matched on word boundaries so "almost" doesn't read as "most".
+        if re.search(RANKING_PHRASE_PATTERN, question_lower):
+            return {
+                "is_ambiguous": False,
+                "confidence_score": 1.0,
+                "ambiguity_type": AmbiguityType.UNKNOWN,
+                "explanation": "Question is a superlative/per-group aggregation, bypassing ambiguity check.",
                 "clarification_needed": None
             }
 
@@ -376,42 +443,132 @@ Return a JSON object:
 
     def generate_clarification_question(
         self,
-        ambiguity_type: AmbiguityType
+        ambiguity_type: AmbiguityType,
+        user_question: str = ""
     ) -> ClarificationQuestion:
         """
         Generate a clarification question for a specific ambiguity type.
-        
+
+        Each option is a COMPLETE question the user could have asked, not a
+        fragment. That matters because picking an option sends it straight back
+        as the next question: a fragment like "All items" arrives on its own
+        and gets answered as if it were the whole request. Self-contained
+        options remove that failure entirely - there is nothing left to stitch.
+
         Args:
-            ambiguity_type (AmbiguityType): The type of ambiguity detected.
-        
+            ambiguity_type: The type of ambiguity detected.
+            user_question: What the user actually asked, echoed back so the
+                prompt refers to their words instead of "this item".
+
         Returns:
             ClarificationQuestion: A structured clarification question.
-            
-        Example:
-            clarification = manager.generate_clarification_question(
-            AmbiguityType.TIME_PERIOD
-        )
-        # Returns: ClarificationQuestion with question and options
         """
-        if ambiguity_type not in self.CLARIFICATIONS_LIBRARY:
-            # Fallback for unknown ambiguity types
+        asked = (user_question or "").strip().rstrip("?")
+        subject = self._subject_of(asked)
+
+        if ambiguity_type in (AmbiguityType.TIME_PERIOD, AmbiguityType.DATE_RANGE):
+            base = asked or "the figures"
             return ClarificationQuestion(
-                question="Could you provide more details about your question?",
-                ambiguity_type=AmbiguityType.UNKNOWN,
-                options=["Show me available options", "Let me rephrase"],
+                question=f'Which period should "{base}" cover?',
+                ambiguity_type=ambiguity_type,
+                options=[
+                    f"{base} in the last 7 days",
+                    f"{base} in the last 30 days",
+                    f"{base} this year",
+                    f"{base} for all time",
+                ],
                 is_required=True,
-                confidence_score=0.6
+                confidence_score=0.8,
             )
-        
-        clarif = self.CLARIFICATIONS_LIBRARY[ambiguity_type]
-        
+
+        if ambiguity_type in (AmbiguityType.ENTITY_SELECTION, AmbiguityType.UNKNOWN):
+            plural = self._pluralize(subject)
+            return ClarificationQuestion(
+                question=f'Which {subject} did you mean?',
+                ambiguity_type=ambiguity_type,
+                options=[
+                    f"Show all {plural}",
+                    f"Show the top 10 {plural}",
+                    f"How many {plural} are there in total?",
+                ],
+                is_required=True,
+                confidence_score=0.8,
+            )
+
+        if ambiguity_type in (AmbiguityType.METRIC_AMBIGUITY, AmbiguityType.COLUMN_AMBIGUITY):
+            plural = self._pluralize(subject)
+            return ClarificationQuestion(
+                question=f'Which measure of "{asked or subject}" do you want?',
+                ambiguity_type=ambiguity_type,
+                options=[
+                    f"How many {plural} are there in total?",
+                    f"What is the average value across {plural}?",
+                    f"What is the highest value among {plural}?",
+                ],
+                is_required=True,
+                confidence_score=0.8,
+            )
+
+        if ambiguity_type == AmbiguityType.AGGREGATION_TYPE:
+            base = asked or "the data"
+            return ClarificationQuestion(
+                question=f'How should "{base}" be summarised?',
+                ambiguity_type=ambiguity_type,
+                options=[
+                    f"What is the total of {base}?",
+                    f"What is the average of {base}?",
+                    f"How many records are in {base}?",
+                ],
+                is_required=True,
+                confidence_score=0.8,
+            )
+
+        if ambiguity_type == AmbiguityType.COMPARISON_PERIOD:
+            base = asked or "the figures"
+            return ClarificationQuestion(
+                question=f'What should "{base}" be compared against?',
+                ambiguity_type=ambiguity_type,
+                options=[
+                    f"{base}, broken down by month",
+                    f"{base}, broken down by category",
+                    f"{base} this year versus last year",
+                ],
+                is_required=True,
+                confidence_score=0.8,
+            )
+
         return ClarificationQuestion(
-            question=clarif["question"],
-            ambiguity_type=ambiguity_type,
-            options=clarif["options"],
+            question="Could you say a bit more about what you would like to see?",
+            ambiguity_type=AmbiguityType.UNKNOWN,
+            options=[
+                "Show all customers",
+                "Show all orders",
+                "Show all products",
+            ],
             is_required=True,
-            confidence_score=0.8
+            confidence_score=0.6,
         )
+
+    # Entities this schema actually holds, so a clarification never offers to
+    # look up something that does not exist.
+    KNOWN_SUBJECTS = ("customer", "product", "order", "payment", "category", "city", "tier")
+
+    def _subject_of(self, question: str) -> str:
+        """Name the thing the question is about, for use in the options."""
+        lowered = (question or "").lower()
+        for subject in self.KNOWN_SUBJECTS:
+            if subject in lowered:
+                return subject
+        return "record"
+
+    @staticmethod
+    def _pluralize(noun: str) -> str:
+        """Crude plural, adequate for the handful of nouns in KNOWN_SUBJECTS."""
+        if noun.endswith("y") and not noun.endswith(("ay", "ey", "oy", "uy")):
+            return noun[:-1] + "ies"
+        if noun.endswith(("s", "x", "z", "ch", "sh")):
+            return noun + "es"
+        return noun + "s"
 
     def build_clarification_prompt(self, user_question: str) -> Dict[str, str]:
         """
@@ -433,7 +590,7 @@ Return a JSON object:
             }
         
         ambiguity_type = ambiguity_analysis["ambiguity_type"]
-        clarification = self.generate_clarification_question(ambiguity_type)
+        clarification = self.generate_clarification_question(ambiguity_type, user_question)
         
         return {
             "status": "clarification_needed",

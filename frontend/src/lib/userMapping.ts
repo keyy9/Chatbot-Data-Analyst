@@ -1,5 +1,15 @@
 import type { ManagedUser } from "../types/user";
+import type { QueryLog } from "../types/query";
 import type { ManagedUserApiShape } from "./apiClient";
+
+/**
+ * Name to render for a query log's author. The backend resolves the name
+ * against the `users` table and flags accounts that are gone, so this never
+ * has to guess by matching strings against the managed-user list.
+ */
+export function queryLogAuthor(log: QueryLog): string {
+  return log.userDeleted ? "Deleted User" : log.user;
+}
 
 export function mapManagedUser(raw: ManagedUserApiShape): ManagedUser {
   const total = raw.total_queries;
@@ -19,7 +29,8 @@ export function mapManagedUser(raw: ManagedUserApiShape): ManagedUser {
     successfulQueries: successful,
     failedQueries: raw.failed_queries,
     successRate: total > 0 ? successful / total : 0,
-    lastActive: raw.last_login_at ? new Date(raw.last_login_at).toLocaleString() : "Never",
+    lastActive: raw.last_active_at ? new Date(raw.last_active_at).toLocaleString() : "Never",
+    lastActiveAt: raw.last_active_at,
     createdAt: raw.created_at ? new Date(raw.created_at).toLocaleDateString() : "—",
   };
 }

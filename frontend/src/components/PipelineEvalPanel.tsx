@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Grid3x3, RefreshCw, AlertTriangle } from "lucide-react";
+import { Grid3x3, RefreshCw, AlertTriangle, Play } from "lucide-react";
 import { evaluationApi, ApiError } from "../lib/apiClient";
 import type { PipelineEvalRun, PipelineOutcome } from "../types/benchmark";
 import { useAuthStore } from "../store/authStore";
@@ -12,7 +12,11 @@ const OUTCOME_LABEL: Record<PipelineOutcome, string> = {
 
 const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
 
-export const PipelineEvalPanel: React.FC = () => {
+export const PipelineEvalPanel: React.FC<{
+  refreshKey?: number;
+  onRun?: (mode: "pipeline") => void;
+  isRunning?: boolean;
+}> = ({ refreshKey = 0, onRun, isRunning = false }) => {
   const { user } = useAuthStore();
   const [run, setRun] = useState<PipelineEvalRun | null>(null);
   const [loading, setLoading] = useState(true);
@@ -21,12 +25,13 @@ export const PipelineEvalPanel: React.FC = () => {
   useEffect(() => {
     if (!user?.userId) return;
     setLoading(true);
+    setError(null);
     evaluationApi
       .getLatestPipelineEval(user.userId)
       .then(setRun)
       .catch((e) => setError(e instanceof ApiError ? e.message : "Failed to load evaluation results."))
       .finally(() => setLoading(false));
-  }, [user?.userId]);
+  }, [user?.userId, refreshKey]);
 
   if (loading) {
     return (
@@ -53,14 +58,26 @@ export const PipelineEvalPanel: React.FC = () => {
 
   return (
     <div className="bg-surface border border-border shadow-lg rounded-xl p-5 space-y-5 font-sans">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Grid3x3 className="w-4 h-4 text-accent" />
-          <h3 className="text-sm font-bold text-white">Pipeline Routing Evaluation</h3>
+          <h3 className="text-sm font-bold text-text">Pipeline Routing Evaluation</h3>
         </div>
-        <span className="text-[10px] text-text-muted font-mono">
-          {run.total_questions} questions &middot; run {new Date(run.run_at).toLocaleString()}
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="text-[10px] text-text-muted font-mono">
+            {run.total_questions} questions &middot; run {new Date(run.run_at).toLocaleString()}
+          </span>
+          {onRun && (
+            <button
+              type="button"
+              onClick={() => onRun("pipeline")}
+              disabled={isRunning}
+              className="px-3 py-1.5 text-xs font-bold rounded-lg bg-accent hover:bg-accent-hover text-white flex gap-1.5 items-center disabled:opacity-50 cursor-pointer transition-colors shadow-sm"
+            >
+              <Play className="w-3 h-3" /> {isRunning ? "Running..." : "Run Pipeline Eval"}
+            </button>
+          )}
+        </div>
       </div>
       <p className="text-[11px] text-text-muted -mt-3">
         Does each test question route to the right outcome (answered / asked for clarification / correctly
@@ -72,19 +89,19 @@ export const PipelineEvalPanel: React.FC = () => {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-surface-2 border border-border rounded-lg p-3">
           <span className="text-[9px] uppercase font-bold text-text-muted block">Accuracy</span>
-          <span className="text-lg font-extrabold text-white font-mono">{pct(run.metrics.accuracy)}</span>
+          <span className="text-lg font-extrabold text-text font-mono">{pct(run.metrics.accuracy)}</span>
         </div>
         <div className="bg-surface-2 border border-border rounded-lg p-3">
           <span className="text-[9px] uppercase font-bold text-text-muted block">Macro Precision</span>
-          <span className="text-lg font-extrabold text-white font-mono">{pct(macro_avg.precision)}</span>
+          <span className="text-lg font-extrabold text-text font-mono">{pct(macro_avg.precision)}</span>
         </div>
         <div className="bg-surface-2 border border-border rounded-lg p-3">
           <span className="text-[9px] uppercase font-bold text-text-muted block">Macro Recall</span>
-          <span className="text-lg font-extrabold text-white font-mono">{pct(macro_avg.recall)}</span>
+          <span className="text-lg font-extrabold text-text font-mono">{pct(macro_avg.recall)}</span>
         </div>
         <div className="bg-surface-2 border border-border rounded-lg p-3">
           <span className="text-[9px] uppercase font-bold text-text-muted block">Macro F1</span>
-          <span className="text-lg font-extrabold text-white font-mono">{pct(macro_avg.f1)}</span>
+          <span className="text-lg font-extrabold text-text font-mono">{pct(macro_avg.f1)}</span>
         </div>
       </div>
 

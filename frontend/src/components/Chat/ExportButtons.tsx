@@ -1,6 +1,9 @@
 import React, { useState } from "react";
-import { Download, FileText, Loader2 } from "lucide-react";
+import { Download, FileText, Loader2, BookmarkCheck, Bookmark } from "lucide-react";
 import { exportResultAsCsv, exportResultAsPdf } from "../../lib/exportUtils";
+import { useNoteStore } from "../../store/noteStore";
+import { useSessionStore } from "../../store/sessionStore";
+import { useUiStore } from "../../store/uiStore";
 
 interface ExportButtonsProps {
   questionText: string;
@@ -15,6 +18,7 @@ interface ExportButtonsProps {
    * time this answer is ever interacted with.
    */
   chartElementRef?: React.RefObject<HTMLElement | null>;
+  hideSaveObservation?: boolean;
 }
 
 const buttonClass =
@@ -27,7 +31,7 @@ const buttonClass =
  * Per-answer export controls, entirely client-side: both buttons build
  * their file from data already held in the message's state (no network
  * request, no re-query), so the export always matches exactly what's on
- * screen.
+ * screen. Also includes 1-click Save Observation into workspace notes.
  */
 export const ExportButtons: React.FC<ExportButtonsProps> = ({
   questionText,
@@ -35,9 +39,14 @@ export const ExportButtons: React.FC<ExportButtonsProps> = ({
   sql,
   columns,
   rows,
-  chartElementRef
+  chartElementRef,
+  hideSaveObservation = false
 }) => {
   const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [isSaved, setIsSaved] = useState(false);
+  const { createNote, setSelectedNoteId } = useNoteStore();
+  const { activeSessionId } = useSessionStore();
+  const { toggleNotesDrawer } = useUiStore();
 
   const handleCsvExport = () => {
     exportResultAsCsv(columns, rows, questionText);
@@ -59,14 +68,41 @@ export const ExportButtons: React.FC<ExportButtonsProps> = ({
     }
   };
 
+  const handleSaveObservation = () => {
+    const title = questionText.trim() || "Analytical Observation";
+    const formattedContent = [
+      `### Question`,
+      questionText,
+      ``,
+      `### Key Findings & Explanation`,
+      explanationText,
+      sql ? `\n### Executed SQL Query\n\`\`\`sql\n${sql}\n\`\`\`` : "",
+      `\n### Data Preview Summary`,
+      `- Total Records Returned: ${rows.length}`,
+      `- Columns: ${columns.join(", ")}`
+    ].filter(Boolean).join("\n");
+
+    const noteId = createNote(title, formattedContent, activeSessionId || "", "Analytical Finding");
+    setSelectedNoteId(noteId);
+    setIsSaved(true);
+    toggleNotesDrawer(true);
+    setTimeout(() => setIsSaved(false), 4000);
+  };
+
   return (
-    <div className="flex items-center gap-1.5 pt-1 font-sans">
+    <div className="flex items-center gap-1.5 pt-1 font-sans flex-wrap">
+      {!hideSaveObservation && (
+        <button type="button" onClick={handleSaveObservation} className={`${buttonClass} ${isSaved ? "border-emerald-500/40 text-emerald-500 bg-emerald-500/10" : ""}`}>
+          {isSaved ? <BookmarkCheck className="w-3 h-3 text-emerald-500" /> : <Bookmark className="w-3 h-3 text-accent" />}
+          {isSaved ? "Saved Note!" : "Save Observation"}
+        </button>
+      )}
       <button type="button" onClick={handleCsvExport} className={buttonClass}>
-        <Download className="w-3 h-3" />
+        <Download className="w-3 h-3 text-accent" />
         Export CSV
       </button>
       <button type="button" onClick={handlePdfExport} disabled={isExportingPdf} className={buttonClass}>
-        {isExportingPdf ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileText className="w-3 h-3" />}
+        {isExportingPdf ? <Loader2 className="w-3 h-3 animate-spin" /> : <FileText className="w-3 h-3 text-teal" />}
         {isExportingPdf ? "Generating..." : "Export PDF"}
       </button>
     </div>

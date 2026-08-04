@@ -11,6 +11,7 @@ from datetime import datetime, date
 from decimal import Decimal
 from enum import Enum
 import json
+import re
 
 
 class ResultType(Enum):
@@ -43,6 +44,61 @@ class QueryResult:
     columns: List[str]
     execution_time: float
     result_type: ResultType = ResultType.TABLE
+
+
+def describe_query_scope(generated_sql: Optional[str], row_count: int) -> str:
+    """
+    Describe, in plain language, what the returned rows represent.
+
+    The explainer only ever saw the rows, never the SQL that produced them, so
+    it had no way to tell "the table holds one category" from "I asked for the
+    single top category". It guessed - and told users things like "we only have
+    data for one category, it's the only category we have data for" for a
+    perfectly ordinary `... ORDER BY count DESC LIMIT 1`.
+
+    These lines are handed to the model so it stops guessing.
+
+    Pure function: no I/O, so the rules can be tested directly.
+
+    Args:
+        generated_sql: The SQL that produced the rows, if known.
+        row_count: How many rows came back.
+
+    Returns:
+        str: Newline-separated notes for the prompt.
+    """
+    notes: List[str] = []
+    sql = " ".join((generated_sql or "").split())
+    upper = sql.upper()
+
+    limit_match = re.search(r"\bLIMIT\s+(\d+)\b", upper)
+    if limit_match:
+        n = limit_match.group(1)
+        notes.append(
+            f"- These are the TOP {n} row(s) only - the query asked for the best {n} "
+            f"by ranking. More rows exist in the database. Never say this is all the "
+            f"data there is, or that only {row_count} of something exists."
+        )
+
+    if "GROUP BY" in upper:
+        notes.append("- Each row is one group (one category, city, tier, method, and so on).")
+    elif row_count == 1 and re.search(r"\b(COUNT|SUM|AVG|MIN|MAX)\s*\(", upper):
+        notes.append("- This is one overall figure calculated across all matching records.")
+
+    where_match = re.search(r"\bWHERE\b(.*?)(?:\bGROUP BY\b|\bORDER BY\b|\bLIMIT\b|$)", sql, re.IGNORECASE)
+    if where_match and where_match.group(1).strip():
+        notes.append(
+            f"- Only records matching this filter are included: {where_match.group(1).strip()}. "
+            f"Mention the scope if it matters to the answer."
+        )
+
+    if row_count == 0:
+        notes.append("- No records matched. Say so plainly; do not speculate about why.")
+
+    if not notes:
+        notes.append("- These rows are the complete result for the question as asked.")
+
+    return "\n".join(notes)
 
 
 class ExplanationPromptManager:
@@ -81,25 +137,30 @@ Your task is to convert raw database query results into friendly, understandable
 
 ## EXPLANATION PATTERNS:
 
+Every example below states ONLY what its own result contains. None of them
+invents a comparison to a period that was not queried - that would break rule 10.
+
 ### Single Metric (COUNT, SUM, AVG, etc.):
-"The [metric] is [value]. [Optional context about significance]."
-Example: "The total revenue for this month is Rp 125.430.000. This is 12% higher than last month."
+"The [metric] is [value]. [Optional context drawn from this result only]."
+Example: "The total revenue from completed orders is Rp 12.213.000.000, across 6.644 orders."
 
 ### Top/Bottom N:
 "The top [N] [items] are: [list]. [Details about rankings]."
-Example: "The top 3 products by revenue are: Product A (Rp 50.000.000), Product B (Rp 35.000.000), and Product C (Rp 28.000.000)."
+Example: "The top 3 categories by revenue are: Home (Rp 2.617.737.000), Fashion (Rp 2.239.839.000), and Electronics (Rp 1.882.778.000). Home leads Fashion by about Rp 378 million."
 
-### Time Series:
-"[Metric] shows [trend description]. [Peak/trough details]."
-Example: "Sales increased steadily throughout Q1, peaking in March with Rp 98.500.000."
-
-### Comparison:
-"[Period 1] had [value1], while [Period 2] had [value2]. This represents a [change]% [increase/decrease]."
-Example: "January had Rp 45.200.000 in sales, while February had Rp 52.100.000. This is a 15% increase."
+### Single top result:
+"[Item] has the [most/highest] [measure], with [value]."
+Example: "Home has the most products, with 35."
+Never describe a single returned row as though it were the only one that exists.
 
 ### Aggregation/Breakdown:
-"[Category 1] accounts for [percentage/value], [Category 2] for [percentage/value], and so on."
-Example: "Online sales make up 65% of total revenue, while in-store sales account for 35%."
+"[Category 1] accounts for [value], [Category 2] for [value], and so on."
+Example: "Bronze is the largest tier with 537 customers, followed by Silver with 318 and Gold with 145."
+
+### Comparison (ONLY when both sides are present in the result):
+"[Group 1] had [value1], while [Group 2] had [value2]."
+Example: "Bank transfer accounts for Rp 4.876.267.000 in paid payments, ahead of virtual account at Rp 3.638.352.000."
+If the result contains one period or one group, there is nothing to compare - do not invent a baseline.
 
 ## KEY INSIGHTS TO HIGHLIGHT:
 
@@ -311,30 +372,37 @@ Example: "Online sales make up 65% of total revenue, while in-store sales accoun
         self,
         user_question: str,
         generated_sql: str,
-        query_result: QueryResult
+        query_result: QueryResult,
+        conversation_context: str = ""
     ) -> Dict[str, str]:
         """
         Build a complete explanation prompt.
-        
+
         Args:
             user_question (str): The user's original question.
             generated_sql (str): The SQL that was executed.
             query_result (QueryResult): The database query result.
-        
+            conversation_context (str): Recent conversation history so the
+                explanation can reference earlier turns and read as a
+                continuous conversation rather than an isolated answer.
+
         Returns:
             Dict[str, str]: Dictionary with 'system' and 'user' keys.
         """
         system_prompt = self.SYSTEM_PROMPT
-        
+
         # Format the result data for the prompt
         if query_result.result_type == ResultType.SINGLE_METRIC:
             metric_name, metric_value = self.extract_single_metric(query_result.data)
             formatted_result = f"Metric: {metric_name}, Value: {metric_value}"
         else:
             formatted_result = json.dumps(query_result.data, indent=2, default=str)
-        
-        user_prompt = f"""User's Question: {user_question}
 
+        context_block = f"\n{conversation_context}\n" if conversation_context else ""
+        scope = describe_query_scope(generated_sql, query_result.row_count)
+
+        user_prompt = f"""User's Question: {user_question}
+{context_block}
 Database Result:
 {formatted_result}
 
@@ -342,8 +410,11 @@ Columns: {', '.join(query_result.columns)}
 Total Rows: {query_result.row_count}
 Execution Time: {query_result.execution_time}ms
 
-Please provide a clear, natural language explanation of this result."""
-        
+How to read this result:
+{scope}
+
+Please provide a clear, natural language explanation of this result. If the recent conversation history is relevant, connect this answer to the earlier turns so the conversation flows."""
+
         return {
             "system": system_prompt,
             "user": user_prompt
@@ -486,10 +557,50 @@ Please provide a clear, natural language explanation of this result."""
         explanation = explanation.replace("```", "")
         
         # Clean up extra horizontal whitespace, but preserve newlines
-        lines = [" ".join(line.split()) for line in explanation.splitlines()]
-        explanation = "\n".join(lines)
-        
         return explanation.strip()
+
+    def generate_suggested_questions(
+        self,
+        user_question: str,
+        sql: Optional[str] = None,
+        columns: Optional[List[str]] = None,
+        data: Optional[List[Dict[str, Any]]] = None
+    ) -> List[str]:
+        """
+        Generate 2-3 contextual follow-up questions for data exploration.
+        """
+        suggestions = []
+        q_lower = user_question.lower()
+
+        first_item = ""
+        if data and isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
+            first_val = list(data[0].values())[0]
+            if first_val:
+                first_item = str(first_val)
+
+        if "top" in q_lower or "highest" in q_lower or "best" in q_lower or "teratas" in q_lower:
+            if first_item:
+                suggestions.append(f"Show details for {first_item}")
+            suggestions.append("Compare this with the lowest performing items")
+            suggestions.append("Show the monthly trend for these results")
+        elif "sales" in q_lower or "revenue" in q_lower or "total" in q_lower or "penjualan" in q_lower:
+            suggestions.append("Which payment methods contributed most to this revenue?")
+            suggestions.append("Show customer distribution by tier for these sales")
+            suggestions.append("Compare this revenue to the previous month")
+        elif "customer" in q_lower or "user" in q_lower or "pelanggan" in q_lower:
+            suggestions.append("What are the top purchased products by these customers?")
+            suggestions.append("Show customer distribution by city")
+            suggestions.append("List customers with more than 3 orders")
+        elif "product" in q_lower or "item" in q_lower or "produk" in q_lower:
+            suggestions.append("Show stock status and pricing for these products")
+            suggestions.append("Which category has the highest sales volume?")
+            suggestions.append("List products with zero sales in the last month")
+        else:
+            suggestions.append("Show total revenue and order count for this data")
+            suggestions.append("Break down these results by category")
+            suggestions.append("Show monthly trend for these results")
+
+        return suggestions[:3]
 
 
 # ============ Singleton Instance ============

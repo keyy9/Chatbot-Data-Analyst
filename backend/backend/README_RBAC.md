@@ -6,6 +6,11 @@ Supports 2 different interfaces:
 
 ## Roles
 
+> **Only `USER` and `ADMIN` are assignable in the running application.** The `users` table stores
+> `role` as `'user' | 'admin'`, and the login/session flow only ever issues those two. `ANALYST` and
+> `VIEWER` are defined in `ai/rbac/roles.py` as part of the permission model but cannot currently be
+> granted to an account through the UI or the database - treat them as planned, not shipped.
+
 ### USER (Read-Only)
 - **Permissions**: READ only
 - **Operations**: SELECT queries
@@ -18,13 +23,13 @@ Supports 2 different interfaces:
 - **Max Rows**: Unlimited
 - **Use Case**: Administrators managing data
 
-### ANALYST (Advanced Read)
+### ANALYST (Advanced Read) — *defined, not assignable*
 - **Permissions**: READ, EXPORT_DATA, VIEW_MONITORING
 - **Operations**: SELECT queries + data export
 - **Max Rows**: 10000 rows per query
 - **Use Case**: Data analysts with export capabilities
 
-### VIEWER (Limited Read)
+### VIEWER (Limited Read) — *defined, not assignable*
 - **Permissions**: READ only
 - **Operations**: SELECT queries (very limited)
 - **Max Rows**: 100 rows per query

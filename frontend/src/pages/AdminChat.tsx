@@ -1,5 +1,5 @@
 import React, { useRef, useEffect } from "react";
-import { Sparkles, Trash2, RefreshCw, Mic, Square, MicOff, Send } from "lucide-react";
+import { Sparkles, Trash2, RefreshCw, Mic, Square, MicOff, Send, MessageSquarePlus, Plus, Edit2 } from "lucide-react";
 import type { Message } from "../types";
 import { ChatBubble } from "../components/Chat/ChatBubble";
 import { ModelSelector } from "../components/Chat/ModelSelector";
@@ -9,26 +9,36 @@ interface AdminChatProps {
   chatMessages: Message[];
   setChatMessages: React.Dispatch<React.SetStateAction<Message[]>>;
   isChatLoading: boolean;
-  chatInput: string;
-  setChatInput: (input: string) => void;
-  handleAdminChatSubmit: (e: React.FormEvent) => void;
+  handleAdminChatSubmit: (queryText: string) => void;
   handleConfirmWrite: (messageId: string, token: string) => void;
   handleClarificationOption: (option: string) => void;
   onCompare: (questionText: string) => void;
+  adminSessions?: { id: string; title: string; createdAt: number }[];
+  activeAdminSessionId?: string | null;
+  onSelectAdminSession?: (sessionId: string) => void;
+  onCreateAdminSession?: () => void;
+  onDeleteAdminSession?: (sessionId: string) => void;
+  onRenameAdminSession?: (sessionId: string, newTitle: string) => void;
 }
 
 export const AdminChat: React.FC<AdminChatProps> = ({
   chatMessages,
   setChatMessages,
   isChatLoading,
-  chatInput,
-  setChatInput,
   handleAdminChatSubmit,
   handleConfirmWrite,
   handleClarificationOption,
   onCompare,
+  adminSessions = [],
+  activeAdminSessionId,
+  onSelectAdminSession,
+  onCreateAdminSession,
+  onDeleteAdminSession,
+  onRenameAdminSession,
 }) => {
+  const [chatInput, setChatInput] = React.useState("");
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const [micLang, setMicLang] = React.useState<"id-ID" | "en-US">("id-ID");
 
   const {
     isSupported: micSupported,
@@ -38,8 +48,9 @@ export const AdminChat: React.FC<AdminChatProps> = ({
     start: startListening,
     stop: stopListening,
   } = useSpeechRecognition({
+    lang: micLang,
     onResult: (transcript) => {
-      setChatInput(chatInput ? `${chatInput.trim()} ${transcript}` : transcript);
+      setChatInput((prev) => (prev ? `${prev.trim()} ${transcript}` : transcript));
     },
   });
 
@@ -60,9 +71,9 @@ export const AdminChat: React.FC<AdminChatProps> = ({
   return (
     <div className="bg-surface border border-border shadow-lg rounded-3xl flex flex-col h-[650px] text-text overflow-hidden animate-fade-in font-sans">
       {/* Chat Header */}
-      <div className="flex items-center justify-between p-5 border-b border-border bg-surface-2/45">
+      <div className="flex flex-wrap items-center justify-between p-4 md:p-5 border-b border-border bg-surface-2/45 gap-3">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 bg-teal/10 text-teal border border-teal/20 rounded-full flex items-center justify-center shadow-md">
+          <div className="w-9 h-9 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-full flex items-center justify-center shadow-md">
             <Sparkles className="w-5 h-5" />
           </div>
           <div>
@@ -74,25 +85,75 @@ export const AdminChat: React.FC<AdminChatProps> = ({
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+
+        {/* Admin Session Controls & Actions */}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* New Admin Chat Button */}
+          {onCreateAdminSession && (
+            <button
+              type="button"
+              onClick={onCreateAdminSession}
+              className="px-3 py-1.5 bg-accent/15 hover:bg-accent text-accent hover:text-white border border-accent/30 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer font-sans active:scale-95 shadow-sm"
+              title="Create new admin chat session"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>New Chat</span>
+            </button>
+          )}
+
+          {/* Admin Session Selector Dropdown */}
+          {adminSessions.length > 0 && onSelectAdminSession && (
+            <div className="flex items-center gap-1">
+              <select
+                value={activeAdminSessionId || ""}
+                onChange={(e) => onSelectAdminSession(e.target.value)}
+                className="bg-surface-hover text-xs font-bold px-3 py-1.5 border border-border rounded-xl text-text focus:outline-none focus:ring-2 focus:ring-accent cursor-pointer font-sans max-w-[180px] truncate"
+              >
+                {adminSessions.map((sess) => (
+                  <option key={sess.id} value={sess.id}>
+                    {sess.title}
+                  </option>
+                ))}
+              </select>
+
+              {/* Rename Active Session Button */}
+              {activeAdminSessionId && onRenameAdminSession && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const activeSess = adminSessions.find((s) => s.id === activeAdminSessionId);
+                    const currentTitle = activeSess?.title || "";
+                    const newTitle = prompt("Enter new title for this admin chat session:", currentTitle);
+                    if (newTitle && newTitle.trim() && newTitle.trim() !== currentTitle) {
+                      onRenameAdminSession(activeAdminSessionId, newTitle.trim());
+                    }
+                  }}
+                  className="p-1.5 border border-border bg-surface-2/50 hover:bg-surface-2 text-text-muted hover:text-text rounded-xl text-xs font-bold transition-all flex items-center justify-center cursor-pointer font-sans"
+                  title="Rename current session"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          )}
+
           <ModelSelector />
-          <button
-            type="button"
-            onClick={() =>
-              setChatMessages([
-                {
-                  id: "welcome",
-                  sender: "ai",
-                  text: "Hello! I am your AI Data Analyst assistant with administrative database privileges. Ask me anything about our database, or perform data operations (INSERT, UPDATE, DELETE). For example, try asking 'Show all products in the store' or 'Delete all orders with cancelled status'.",
-                  timestamp: Date.now(),
-                },
-              ])
-            }
-            className="px-3 py-1.5 border border-border bg-surface-2/50 hover:bg-surface-2 rounded-full text-text-muted hover:text-text text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer font-sans"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            Clear History
-          </button>
+
+          {/* Delete Active Session */}
+          {activeAdminSessionId && onDeleteAdminSession && adminSessions.length > 1 && (
+            <button
+              type="button"
+              onClick={() => {
+                if (confirm("Delete this admin chat session?")) {
+                  onDeleteAdminSession(activeAdminSessionId);
+                }
+              }}
+              className="p-1.5 border border-border bg-surface-2/50 hover:bg-red-500/20 text-text-muted hover:text-red-400 rounded-xl text-xs font-bold transition-all flex items-center justify-center cursor-pointer font-sans"
+              title="Delete current session"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -110,8 +171,10 @@ export const AdminChat: React.FC<AdminChatProps> = ({
               message={msg}
               questionText={precedingQuestion}
               onClarificationSelect={handleClarificationOption}
+              onSuggestedSelect={handleClarificationOption}
               onConfirmWrite={handleConfirmWrite}
               onCompare={onCompare}
+              hideSaveObservation={true}
             />
           );
         })}
@@ -207,7 +270,13 @@ export const AdminChat: React.FC<AdminChatProps> = ({
 
       {/* Text Input area */}
       <form
-        onSubmit={handleAdminChatSubmit}
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!chatInput.trim()) return;
+          const text = chatInput.trim();
+          setChatInput("");
+          handleAdminChatSubmit(text);
+        }}
         className="p-4 border-t border-border bg-surface flex gap-2 font-sans"
       >
         <input
@@ -220,9 +289,17 @@ export const AdminChat: React.FC<AdminChatProps> = ({
         />
         <button
           type="button"
+          onClick={() => setMicLang(micLang === "id-ID" ? "en-US" : "id-ID")}
+          className="text-[10px] font-extrabold px-2.5 py-1 rounded-full bg-surface-2 border border-border text-text-muted hover:text-accent hover:border-accent/40 cursor-pointer transition-all shadow-2xs font-mono self-center"
+          title={`Voice Language: ${micLang === "id-ID" ? "Bahasa Indonesia (id-ID)" : "English (en-US)"}. Click to switch.`}
+        >
+          {micLang === "id-ID" ? "🇮🇩 ID" : "🇺🇸 EN"}
+        </button>
+        <button
+          type="button"
           onClick={handleMicClick}
           disabled={!micSupported}
-          title={micSupported ? "Voice input" : "Voice input unavailable in this browser"}
+          title={micSupported ? `Voice input (${micLang})` : "Voice input unavailable in this browser"}
           className={`p-3 rounded-full transition-all cursor-pointer flex items-center justify-center flex-shrink-0 disabled:cursor-not-allowed disabled:opacity-40 ${
             isListening
               ? "bg-accent text-white animate-pulse"

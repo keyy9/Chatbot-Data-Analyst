@@ -13,6 +13,35 @@ This module enables users to ask natural language questions about their database
 
 ## 📦 Architecture
 
+The AI core (`backend/ai/`) is a standalone domain layer: it has **no FastAPI dependency**. It raises
+`PermissionError`/`ValueError`, and the HTTP layer (`backend/api/`) translates those into responses.
+SQL execution is injected into the pipeline as a callback, so RBAC enforcement lives in the web layer
+rather than being baked into the pipeline.
+
+```
+backend/
+├── api/                     HTTP layer (FastAPI)
+│   ├── routes/              auth, user_questions, admin_operations, user_management, evaluation, data
+│   └── services/            email delivery
+└── ai/                      domain layer - no web framework imports
+    ├── llm/                 provider clients (Groq, Gemini) + generators + PipelineOrchestrator
+    ├── prompts/             prompt construction per task (sql, clarification, explanation, chart)
+    ├── validators/          SQL guards - read-only enforcement, RBAC-aware write proposals
+    ├── rbac/                roles, permissions, table denylist, user lookup
+    ├── explanation/         insight extraction, source attribution, narrative building
+    ├── chart/               Plotly spec generation
+    ├── evaluation/          benchmark + pipeline eval, result-set comparison
+    ├── monitoring/          query-log persistence
+    └── utils/               DB clients/pooling, schema loader, query executor, chat history
+```
+
+**Request flow (`/api/user/ask`):** route verifies the caller's role → builds a `UserContext` and an
+RBAC-checked SQL executor callback → `PipelineOrchestrator.process()` runs generate → validate →
+execute → explain → recommend chart → route persists the turn and shapes the response.
+
+**Two databases:** the *business* database being queried, and the app's own *control-plane* database
+(users, chat history, query logs, eval results). Both are reached through `ai/utils/supabase_client.py`.
+
 ## 🚀 Quick Start
 
 ### 1. Installation
@@ -371,56 +400,40 @@ rules = validator.get_validation_rules()
 
 ### Monitoring & Logging (`monitoring/logger.py`)
 
+Event logging only - structured lines to the standard server log. It keeps no
+metrics in memory: anything that needs to survive a restart goes in a table.
+
 ```python
-from backend.ai.monitoring.logger import (
-    get_monitoring_logger,
-    EventType,
-    EventSeverity
-)
+from backend.ai.monitoring.logger import get_monitoring_logger, EventType
 
 logger = get_monitoring_logger()
 
-# Log SQL generation
-event = logger.log_sql_generation(
+logger.log_event(
+    event_type=EventType.SQL_EXECUTION,
+    message="Admin NL read executed",
     user_id="user123",
     session_id="session456",
-    user_question="Show top products",
-    generated_sql="SELECT ...",
-    is_valid=True,
-    is_ambiguous=False,
-    duration_ms=250
+    duration_ms=250,
+    status="success"
 )
 
-# Log LLM call
-llm_event = logger.log_llm_call(
+logger.log_error(
     user_id="user123",
     session_id="session456",
-    model="llama-3.3-70b-versatile",
-    prompt_type="sql",
-    input_tokens=150,
-    output_tokens=50,
-    latency_ms=1200,
-    temperature=0.3,
-    max_tokens=1024,
-    finish_reason="stop",
-    estimated_cost=0.015,
-    success=True
+    error_message="Permission denied for table users",
+    error_type="PermissionError",
+    component="sql_executor"
 )
-
-# Get metrics
-metrics = logger.get_metrics_summary(
-    user_id="user123",
-    time_range_minutes=60
-)
-
-print(metrics["total_events"])
-print(metrics["success_rate"])
-print(metrics["total_cost_usd"])
-
-# Export
-logger.export_events_json("events.json")
-logger.export_metrics_json("metrics.json")
 ```
+
+### Per-Query Usage Metrics
+
+Durable usage (provider, model, tokens, estimated cost, LLM latency) is
+persisted per question to `query_logs` by
+`backend.ai.monitoring.query_log_repository.log_query`, using the totals that
+`backend.ai.llm.generator.aggregate_llm_usage` sums across the LLM calls one
+question makes. The admin analytics endpoint aggregates those rows per
+provider. Requires `migrations/20260727_add_llm_usage_to_query_logs.sql`.
 
 ### Model Evaluation (`evaluation/evaluator.py`)
 
@@ -597,4 +610,4 @@ Proprietary - All Rights Reserved
 
 ## 👥 Support
 
-For issues or questions, contact: ai-team@company.com
+For issues or questions, open an issue in this repository or contact the project maintainers.

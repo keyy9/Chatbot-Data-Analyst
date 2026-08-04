@@ -1,20 +1,15 @@
-import { useState } from "react";
 import { useAuthStore } from "../store/authStore";
 
 export const useAuth = () => {
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
-    return localStorage.getItem("admin_authenticated") === "true";
-  });
+  const user = useAuthStore((s) => s.user);
+  const isAuthenticated = !!user?.isAuthenticated && user.role === "admin";
 
   const handleLogout = () => {
-    setIsAuthenticated(false);
-    localStorage.setItem("admin_authenticated", "false");
     useAuthStore.getState().logout();
   };
 
   return {
     isAuthenticated,
-    setIsAuthenticated,
     handleLogout,
   };
 };

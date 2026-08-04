@@ -9,6 +9,7 @@ from typing import Optional, Dict, Any
 from dataclasses import dataclass
 
 from backend.ai.rbac.roles import Role, Permission, get_rbac_manager
+from backend.ai.rbac.table_denylist import APP_INTERNAL_TABLES
 from backend.ai.utils.sql_introspection import extract_tables
 
 # ============ Setup Logging ============
@@ -109,6 +110,15 @@ class AccessControl:
         Returns:
             Dict: {"allowed": bool, "reason": str}
         """
+        # App-internal tables (chat history, notes, auth, eval data, ...) are
+        # never reachable via the NL-to-SQL interface, regardless of role -
+        # this pipeline only ever answers questions about business data.
+        if table_name.lower() in APP_INTERNAL_TABLES:
+            return {
+                "allowed": False,
+                "reason": f"Table '{table_name}' is not accessible via the NL-to-SQL interface"
+            }
+
         # Check role's allowed tables
         allowed_tables = self.rbac.get_allowed_tables(user_context.role)
         

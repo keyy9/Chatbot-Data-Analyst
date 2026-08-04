@@ -1,8 +1,8 @@
-import type { PipelineEvalRun, BenchmarkEvalRun } from "../types/benchmark";
+import type { PipelineEvalRun, BenchmarkEvalRun, ProviderBenchmark } from "../types/benchmark";
 import type { QueryLog } from "../types/query";
-import type { ModelProvider } from "../types";
+import type { ModelProvider, DataInsight } from "../types";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8005";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL !== undefined ? import.meta.env.VITE_API_BASE_URL : (import.meta.env.DEV ? "http://localhost:8005" : "");
 
 export class ApiError extends Error {
   status: number;
@@ -54,6 +54,28 @@ async function requestGet<T>(path: string, params: Record<string, string>): Prom
   return payload as T;
 }
 
+// DELETE endpoints here read their args as query params (FastAPI path +
+// query signature), so params must go in the URL, not a JSON body -
+// sending them in the body yields a 422 (missing required query param).
+async function requestDelete<T>(path: string, params: Record<string, string>): Promise<T> {
+  let response: Response;
+  const query = new URLSearchParams(params).toString();
+
+  try {
+    response = await fetch(`${API_BASE_URL}${path}?${query}`, { method: "DELETE" });
+  } catch {
+    throw new ApiError(0, "Could not reach the AI backend. Is it running?");
+  }
+
+  const payload = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    throw new ApiError(response.status, payload.detail || "Request failed");
+  }
+
+  return payload as T;
+}
+
 // ============ Auth ============
 
 export interface LoginResponse {
@@ -70,6 +92,8 @@ export const authApi = {
     request<LoginResponse>("/api/auth/login", { email, password }),
   verifyOtp: (user_id: string, otp_code: string) =>
     request<LoginResponse>("/api/auth/verify-otp", { user_id, otp_code }),
+  resendOtp: (user_id: string) =>
+    request<{ status: string; message: string }>("/api/auth/resend-otp", { user_id }),
   forgotPassword: (email: string) =>
     request<{ message: string }>("/api/auth/forgot-password", { email }),
   resetPassword: (token: string, new_password: string) =>
@@ -99,6 +123,8 @@ export interface ManagedUserApiShape {
   role: "user" | "admin";
   status: "active" | "inactive" | "suspended";
   last_login_at: string | null;
+  /** Later of `last_login_at` and the user's most recent query. */
+  last_active_at: string | null;
   created_at: string;
   total_queries: number;
   successful_queries: number;
@@ -134,6 +160,8 @@ export interface AskSuccessResponse {
   status: "success";
   generated_sql: string;
   explanation: string;
+  suggested_questions?: string[];
+  insights?: DataInsight[];
   chart_recommendation: ChartRecommendation | Record<string, never>;
   sources: Record<string, unknown>;
   data: Record<string, unknown>[];
@@ -195,9 +223,15 @@ export const userApi = {
   renameSession: (user_id: string, id: string, title: string) =>
     request<{ status: string }>("/api/user/sessions/rename", { user_id, id, title }),
   deleteSession: (user_id: string, session_id: string) =>
-    request<{ status: string }>(`/api/user/sessions/${session_id}`, { user_id }, "DELETE"),
+    requestDelete<{ status: string }>(`/api/user/sessions/${session_id}`, { user_id }),
   getSessionMessages: (user_id: string, session_id: string) =>
     requestGet<{ messages: any[] }>(`/api/user/sessions/${session_id}/messages`, { user_id })
+};
+
+// ============ Schema/table introspection (shared by admin DB Editor & user raw-data viewer) ============
+
+export const dataApi = {
+  getTables: () => requestGet<{ tables: Record<string, string[]> }>("/api/tables", {})
 };
 
 // ============ Admin chat (read + propose/confirm writes) ============
@@ -241,6 +275,12 @@ export const adminApi = {
     request<{ status: "success"; operation: "read"; data: Record<string, unknown>[]; columns: string[]; execution_time_ms: number }>(
       "/api/admin/query",
       { sql, user_id, session_id }
+    ),
+  // Live output for a logged query (re-runs SELECTs read-only server-side).
+  getQueryLogResult: (user_id: string, log_id: string) =>
+    requestGet<{ available: boolean; columns?: string[]; rows?: Record<string, unknown>[]; reason?: string }>(
+      `/api/admin/query-logs/${log_id}/result`,
+      { user_id }
     )
 };
 
@@ -251,16 +291,18 @@ export const evaluationApi = {
     requestGet<PipelineEvalRun>("/api/admin/pipeline-eval/latest", { user_id }),
   getLatestBenchmarkEval: (user_id: string) =>
     requestGet<BenchmarkEvalRun>("/api/admin/benchmark-eval/latest", { user_id }),
+  compareBenchmarkProviders: (user_id: string) =>
+    requestGet<{ providers: ProviderBenchmark[] }>("/api/admin/benchmark-eval/compare", { user_id }),
   getBenchmarkEvalHistory: (user_id: string) =>
     requestGet<{ history: any[] }>("/api/admin/benchmark-eval/history", { user_id }),
   getBenchmarkQuestions: (user_id: string) =>
     requestGet<{ questions: BenchmarkQuestionApi[] }>("/api/admin/benchmark-questions", { user_id }),
   addBenchmarkQuestion: (user_id: string, question: string, gold_sql: string, gold_answer: string) =>
     request<BenchmarkQuestionApi>("/api/admin/benchmark-questions", { user_id, question, gold_sql, gold_answer }),
-  runBenchmark: (user_id: string, limit?: number) =>
-    request<{ status: "started"; message: string }>("/api/admin/benchmark-eval/run", { user_id, limit }),
+  runBenchmark: (user_id: string, limit?: number, mode?: "all" | "sql" | "compare" | "pipeline") =>
+    request<{ status: "started"; message: string }>("/api/admin/benchmark-eval/run", { user_id, limit, mode }),
   getBenchmarkRunStatus: (user_id: string) =>
-    requestGet<{ is_running: boolean; error: string | null }>("/api/admin/benchmark-eval/status", { user_id })
+    requestGet<{ is_running: boolean; running_modes: string[]; error: string | null }>("/api/admin/benchmark-eval/status", { user_id })
 };
 
 export interface BenchmarkQuestionApi {
@@ -287,7 +329,12 @@ export interface AnalyticsSummary {
 
 export const analyticsApi = {
   getSummary: (user_id: string) =>
-    requestGet<AnalyticsSummary>("/api/admin/analytics/summary", { user_id })
+    requestGet<AnalyticsSummary>("/api/admin/analytics/summary", { user_id }),
+  getQueryVolume: (user_id: string, days = 14) =>
+    requestGet<{ trend: { date: string; queries: number; successful: number }[] }>(
+      "/api/admin/analytics/query-volume",
+      { user_id, days: String(days) }
+    )
 };
 
 // ============ Saved Observation Notes (Supabase Persisted) ============
@@ -313,5 +360,5 @@ export const notesApi = {
       last_modified: note.lastModified
     }),
   delete: (user_id: string, note_id: string) =>
-    request<{ status: string; message: string }>(`/api/user/notes/${note_id}`, { user_id }, "DELETE")
+    requestDelete<{ status: string }>(`/api/user/notes/${note_id}`, { user_id })
 };

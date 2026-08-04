@@ -28,6 +28,7 @@ from backend.ai.llm.generator import get_sql_generator
 from backend.ai.rbac.roles import Role
 from backend.ai.rbac.access_control import UserContext
 from backend.ai.validators.sql_guard_rbac import get_sql_guard_rbac
+from backend.ai.validators.write_intent import has_write_intent
 from backend.ai.evaluation.pipeline_metrics import compute_classification_metrics
 from backend.ai.utils.supabase_client import get_supabase_client, get_app_db_client
 from backend.ai.utils.supabase_schema_loader import get_supabase_schema_loader
@@ -54,6 +55,13 @@ def _classify_actual_outcome(
     Returns:
         Tuple[str, str]: (outcome, detail)
     """
+    # `/api/user/ask` refuses a write request before generating anything, so
+    # this has to as well - otherwise the eval reports on a routing step the
+    # real endpoint does not share, and "delete all orders" would be scored on
+    # whatever SELECT the model happened to invent for it.
+    if has_write_intent(question):
+        return "blocked", "write_intent_rejected: read-only caller"
+
     sql_result = sql_generator.generate(question, schema_definition, check_ambiguity=True)
 
     if sql_result.is_ambiguous:

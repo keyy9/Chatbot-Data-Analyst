@@ -1,6 +1,10 @@
 export interface QueryLog {
   id: string;
+  /** Display name of the author, resolved from the `users` table. */
   user: string;
+  userEmail?: string | null;
+  /** True when the author's account no longer exists or was soft-deleted. */
+  userDeleted?: boolean;
   question: string;
   generatedSql: string;
   executionTimeMs: number;
@@ -20,28 +24,4 @@ export interface QueryLog {
   };
   guardrailStatus?: 'Allowed' | 'Blocked';
   guardrailReason?: string;
-}
-
-export interface MockProduct {
-  product_id: number;
-  product_name: string;
-  category: string;
-  unit_price: number;
-  cost: number;
-}
-
-export interface MockCustomer {
-  customer_id: number;
-  name: string;
-  city: string;
-  tier: 'Gold' | 'Silver' | 'Platinum' | 'Bronze';
-  created_at: string;
-}
-
-export interface MockOrder {
-  order_id: number;
-  customer_id: number;
-  order_date: string;
-  status: 'completed' | 'cancelled' | 'refunded';
-  order_total: number;
 }

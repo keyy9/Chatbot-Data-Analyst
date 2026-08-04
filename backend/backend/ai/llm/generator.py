@@ -6,13 +6,15 @@ Combines prompts, client, and validators into high-level generation functions.
 """
 
 import logging
+import re
 from typing import Optional, Dict, Any, Callable, Tuple
 from dataclasses import dataclass
 from datetime import datetime
 
 from backend.ai.llm.client import (
     LLMClient,
-    get_llm_client
+    get_llm_client,
+    parse_json_response
 )
 from backend.ai.prompts.sql_prompt import (
     SQLPromptManager,
@@ -41,6 +43,83 @@ from backend.ai.explanation.explainer import SourceAttributor, get_source_attrib
 
 # ============ Setup Logging ============
 logger = logging.getLogger(__name__)
+
+
+def ensure_deterministic_order(sql: str) -> str:
+    """
+    Give a grouped query a stable row order when the model left it out.
+
+    A `GROUP BY` without `ORDER BY` returns rows in whatever order Postgres
+    finds convenient, so the same question can answer differently between runs.
+    The prompt asks for an explicit ORDER BY, but a small model forgets, so this
+    guarantees it instead of hoping.
+
+    `ORDER BY 1` sorts by the first selected column - the grouping label - which
+    is what a plain breakdown ("how many customers in each tier") wants. It only
+    reorders rows; the set of rows is unchanged, so no answer can become wrong.
+
+    Left alone when the query already has ORDER BY, has no GROUP BY, or carries a
+    LIMIT (a LIMIT without ORDER BY is a ranking the model built deliberately -
+    reordering there could change which rows come back).
+
+    Pure function: no I/O, so the rule can be tested directly.
+    """
+    if not sql:
+        return sql
+
+    stripped = sql.strip().rstrip(";").strip()
+    upper = stripped.upper()
+
+    if "GROUP BY" not in upper:
+        return sql
+    if re.search(r"\bORDER\s+BY\b", upper):
+        return sql
+    if re.search(r"\bLIMIT\b", upper):
+        return sql
+
+    logger.info("Added ORDER BY 1 to a grouped query that had no explicit ordering")
+    return f"{stripped} ORDER BY 1"
+
+
+def aggregate_llm_usage(*llm_responses: Optional[Dict]) -> Dict[str, Any]:
+    """
+    Sum token/cost/latency across the LLM calls made for one user question.
+
+    Answering one question takes several LLM calls (SQL, explanation, chart),
+    so the per-question figures worth recording are the totals. Calls that
+    didn't happen - a step that failed or fell back to a rules-based path -
+    come through as None and are skipped, so `llm_calls` says how many of the
+    totals are actually backed by a real call.
+
+    Pure function: no I/O, no LLM access.
+    """
+    total_input = 0
+    total_output = 0
+    total_cost = 0.0
+    total_latency = 0.0
+    calls = 0
+    model_name: Optional[str] = None
+
+    for response in llm_responses:
+        if not response:
+            continue
+        calls += 1
+        total_input += response.get("input_tokens") or 0
+        total_output += response.get("output_tokens") or 0
+        total_cost += response.get("estimated_cost") or 0.0
+        total_latency += response.get("latency_ms") or 0.0
+        if model_name is None:
+            model_name = response.get("model")
+
+    return {
+        "llm_calls": calls,
+        "model_name": model_name,
+        "input_tokens": total_input,
+        "output_tokens": total_output,
+        "total_tokens": total_input + total_output,
+        "estimated_cost": round(total_cost, 8),
+        "llm_latency_ms": round(total_latency, 2),
+    }
 
 
 @dataclass
@@ -102,6 +181,8 @@ class ChartRecommendationResult:
         alternatives: Alternative chart types
         configuration: Chart-specific configuration
         generation_time_ms: Time taken to generate recommendation
+        llm_response: LLM response metadata, or None when the rules-based
+            fallback produced the recommendation without calling the LLM
     """
     recommendation: ChartRecommendation
     chart_type: str
@@ -110,6 +191,7 @@ class ChartRecommendationResult:
     alternatives: list
     configuration: Dict
     generation_time_ms: float = 0.0
+    llm_response: Optional[Dict] = None
 
 
 class SQLGenerator:
@@ -155,7 +237,9 @@ class SQLGenerator:
         num_examples: int = 3,
         check_ambiguity: bool = True,
         override_system_prompt: Optional[str] = None,
-        conversation_context: str = ""
+        conversation_context: str = "",
+        error_feedback: Optional[str] = None,
+        allow_writes: bool = False
     ) -> SQLGenerationResult:
         """
         Generate SQL from natural language question.
@@ -168,6 +252,10 @@ class SQLGenerator:
             include_examples: Whether to include few-shot examples.
             num_examples: Number of examples to include.
             check_ambiguity: Whether to check for ambiguity first.
+            allow_writes: True on the admin path, so the prompt asks for an
+                INSERT/UPDATE/DELETE when the request is a modification.
+                Leaving this False on a write request yields a SELECT and the
+                change silently never happens.
 
         Returns:
             SQLGenerationResult: The generation result.
@@ -207,13 +295,25 @@ class SQLGenerator:
                 include_examples=include_examples,
                 num_examples=num_examples,
                 override_system_prompt=override_system_prompt,
-                conversation_context=conversation_context
+                conversation_context=conversation_context,
+                allow_writes=allow_writes
             )
+
+            # On a repair attempt, tell the model exactly what went wrong with
+            # its previous SQL so it can correct the specific column/table/value
+            # instead of blindly regenerating the same broken query.
+            user_prompt = prompt["user"]
+            if error_feedback:
+                user_prompt = (
+                    f"{user_prompt}\n\n## PREVIOUS ATTEMPT FAILED\n{error_feedback}\n"
+                    "Return a corrected PostgreSQL SELECT query that fixes this error. "
+                    "Use only real tables/columns from the schema above."
+                )
 
             # ============ Step 3: Call LLM for SQL generation ============
             llm_response = self.llm_client.generate(
                 system_prompt=prompt["system"],
-                user_prompt=prompt["user"]
+                user_prompt=user_prompt
             )
 
             generated_sql = self._clean_sql_output(llm_response.content)
@@ -269,7 +369,7 @@ class SQLGenerator:
             if sql.lower().startswith("sql"):
                 sql = sql[3:]
 
-        return sql.strip().rstrip(";").strip()
+        return ensure_deterministic_order(sql.strip().rstrip(";").strip())
 
 
 class ExplanationGenerator:
@@ -306,7 +406,8 @@ class ExplanationGenerator:
         user_question: str,
         generated_sql: str,
         query_result: QueryResult,
-        use_llm: Optional[bool] = None
+        use_llm: Optional[bool] = None,
+        conversation_context: str = ""
     ) -> ExplanationResult:
         """
         Generate a natural language explanation for a query result.
@@ -316,6 +417,8 @@ class ExplanationGenerator:
             generated_sql: The SQL that was executed.
             query_result: The database query result.
             use_llm: Optional override for whether to use the LLM.
+            conversation_context: Recent conversation history so the
+                explanation can reference prior turns and flow naturally.
 
         Returns:
             ExplanationResult: The explanation result.
@@ -350,7 +453,8 @@ class ExplanationGenerator:
             prompt = self.explanation_manager.build_explanation_prompt(
                 user_question,
                 generated_sql,
-                query_result
+                query_result,
+                conversation_context=conversation_context
             )
 
             llm_response = self.llm_client.generate(
@@ -441,29 +545,37 @@ class ChartRecommender:
         start_time = time.time()
 
         use_llm_final = use_llm if use_llm is not None else self.use_llm
+        llm_usage: Optional[Dict] = None
 
         if use_llm_final:
             try:
                 prompt = self.chart_manager.build_chart_recommendation_prompt(
                     data, columns, user_question, generated_sql
                 )
-                llm_response = self.llm_client.generate_json(
+                # generate() + parse_json_response() rather than generate_json():
+                # the latter throws the LLMResponse away, and with it the token
+                # and cost figures this call contributes to the per-question total.
+                response = self.llm_client.generate(
                     system_prompt=prompt["system"],
                     user_prompt=prompt["user"],
                     max_tokens=512
                 )
+                # Record usage before parsing: those tokens were spent even if
+                # the model returned malformed JSON and we fall back below.
+                llm_usage = response.to_dict()
+                parsed = parse_json_response(response)
 
                 from backend.ai.prompts.chart_prompt import ChartType
 
                 recommendation = ChartRecommendation(
-                    chart_type=ChartType(llm_response.get("chart_type", "table")),
-                    confidence_score=float(llm_response.get("confidence_score", 0.7)),
-                    reason=llm_response.get("reason", "LLM-recommended chart"),
+                    chart_type=ChartType(parsed.get("chart_type", "table")),
+                    confidence_score=float(parsed.get("confidence_score", 0.7)),
+                    reason=parsed.get("reason", "LLM-recommended chart"),
                     alternative_charts=[
-                        ChartType(c) for c in llm_response.get("alternatives", [])
+                        ChartType(c) for c in parsed.get("alternatives", [])
                         if c in [ct.value for ct in ChartType]
                     ],
-                    configuration=llm_response.get("configuration", {})
+                    configuration=parsed.get("configuration", {})
                 )
             except Exception as e:
                 logger.warning(f"LLM chart recommendation failed, falling back to rules: {str(e)}")
@@ -480,7 +592,8 @@ class ChartRecommender:
             reason=formatted["reason"],
             alternatives=formatted["alternatives"],
             configuration=formatted["configuration"],
-            generation_time_ms=(time.time() - start_time) * 1000
+            generation_time_ms=(time.time() - start_time) * 1000,
+            llm_response=llm_usage
         )
 
 
@@ -585,12 +698,79 @@ class PipelineOrchestrator:
         try:
             data, columns, execution_time = query_executor_callback(sql_result.sql)
         except Exception as e:
-            logger.error(f"SQL execution failed: {str(e)}")
-            return {
-                "status": "error",
-                "error": f"SQL execution failed: {str(e)}"
-            }
+            logger.warning(f"SQL execution failed, attempting one self-repair: {str(e)}")
 
+            # One repair attempt: feed the failed SQL and the exact DB error
+            # back to the model so it can fix a wrong column/table/literal
+            # rather than returning a confusing hard error to the user.
+            repair_result = self.sql_generator.generate(
+                user_question,
+                schema_definition,
+                check_ambiguity=False,
+                override_system_prompt=override_system_prompt,
+                conversation_context=conversation_context,
+                error_feedback=f"Failed SQL:\n{sql_result.sql}\n\nDatabase error:\n{str(e)}"
+            )
+
+            if not (repair_result.is_valid and repair_result.sql):
+                logger.error(f"SQL self-repair could not produce a valid query: {str(e)}")
+                return {"status": "error", "error": f"SQL execution failed: {str(e)}"}
+
+            try:
+                data, columns, execution_time = query_executor_callback(repair_result.sql)
+                sql_result = repair_result  # use the repaired query downstream
+                logger.info("SQL self-repair succeeded on retry")
+            except Exception as e2:
+                logger.error(f"SQL execution failed after self-repair: {str(e2)}")
+                return {"status": "error", "error": f"SQL execution failed: {str(e2)}"}
+
+        # ============ Steps 3-8: Turn the rows into an answer ============
+        return self.build_answer(
+            user_question=user_question,
+            sql=sql_result.sql,
+            data=data,
+            columns=columns,
+            execution_time=execution_time,
+            conversation_context=conversation_context,
+            sql_llm_response=sql_result.llm_response,
+            sql_generation_time_ms=sql_result.generation_time_ms
+        )
+
+    def build_answer(
+        self,
+        user_question: str,
+        sql: str,
+        data: list,
+        columns: list,
+        execution_time: float,
+        conversation_context: str = "",
+        sql_llm_response: Optional[Dict] = None,
+        sql_generation_time_ms: float = 0.0
+    ) -> Dict[str, Any]:
+        """
+        Explain, chart, attribute and format an already-executed query.
+
+        Split out of `process()` so callers that have to generate and execute
+        the SQL themselves still produce the same answer through the same
+        code. The admin route is the reason: it authorizes each statement and
+        branches on read vs write *before* anything runs, so it cannot hand
+        control to `process()` - but it should not own a second copy of the
+        explain/chart/format logic either.
+
+        Args:
+            user_question: The question being answered.
+            sql: The SQL that produced `data`.
+            data: Result rows.
+            columns: Result column names.
+            execution_time: How long the query took, in ms.
+            conversation_context: Prior turns, for a context-aware explanation.
+            sql_llm_response: LLM metadata from generating `sql`, so its tokens
+                count toward the per-question total.
+            sql_generation_time_ms: How long generating `sql` took, in ms.
+
+        Returns:
+            Dict: the same success payload shape `process()` returns.
+        """
         # ============ Step 3: Generate Explanation ============
         query_result = QueryResult(
             data=data,
@@ -601,8 +781,9 @@ class PipelineOrchestrator:
 
         explanation_result = self.explanation_generator.generate(
             user_question,
-            sql_result.sql,
-            query_result
+            sql,
+            query_result,
+            conversation_context=conversation_context
         )
 
         # ============ Step 4: Recommend Chart ============
@@ -610,12 +791,12 @@ class PipelineOrchestrator:
             data,
             columns,
             user_question,
-            sql_result.sql
+            sql
         )
 
         # ============ Step 5: Attribute Sources ============
         sources = self.source_attributor.build_sources(
-            sql_result.sql,
+            sql,
             data,
             columns
         )
@@ -631,6 +812,9 @@ class PipelineOrchestrator:
         # prose explanation above, which only highlights insights at its
         # own discretion.
         insights = self.insight_extractor.extract_insights(data, columns)
+        suggested_questions = self.explanation_generator.explanation_manager.generate_suggested_questions(
+            user_question, sql, columns, data
+        )
 
         # ============ Step 8: Format Final Response ============
         logger.info("Pipeline completed successfully")
@@ -638,8 +822,9 @@ class PipelineOrchestrator:
         return {
             "status": "success",
             "user_question": user_question,
-            "generated_sql": sql_result.sql,
+            "generated_sql": sql,
             "explanation": explanation_result.explanation,
+            "suggested_questions": suggested_questions,
             "chart_recommendation": {
                 "type": chart_result.chart_type,
                 "confidence": chart_result.confidence_score,
@@ -662,11 +847,18 @@ class PipelineOrchestrator:
             "data": data,
             "columns": columns,
             "metadata": {
-                "sql_generation_time_ms": sql_result.generation_time_ms,
+                "sql_generation_time_ms": sql_generation_time_ms,
                 "query_execution_time_ms": execution_time,
                 "explanation_generation_time_ms": explanation_result.generation_time_ms,
                 "chart_recommendation_time_ms": chart_result.generation_time_ms,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.utcnow().isoformat(),
+                # Token/cost/latency totals across every LLM call this question
+                # needed, so usage can be persisted and reported per query.
+                **aggregate_llm_usage(
+                    sql_llm_response,
+                    explanation_result.llm_response,
+                    chart_result.llm_response
+                )
             }
         }
 

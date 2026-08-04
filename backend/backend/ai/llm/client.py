@@ -12,8 +12,6 @@ from typing import Optional, Dict, List
 from datetime import datetime
 import json
 
-import httpx
-from groq import Groq, AsyncGroq, RateLimitError, APIError
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 
@@ -21,6 +19,10 @@ from backend.ai.config import get_settings
 
 # ============ Setup Logging ============
 logger = logging.getLogger(__name__)
+
+# Both providers are called through their OpenAI-compatible chat-completions
+# gateway, so `ChatOpenAI` works for each once pointed at the right base URL.
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
 
 class LLMClientConfig:
@@ -146,8 +148,12 @@ class TokenCounter:
     """
 
     # ============ Approximate Pricing (USD per 1K tokens) ============
-    # These are rough estimates - verify current pricing at groq.com/pricing.
+    # These are rough estimates - verify current pricing at groq.com/pricing
+    # and ai.google.dev/pricing before quoting these numbers anywhere.
+    # A model missing from this table reports $0.00, so keep it in sync with
+    # GROQ_MODEL/GEMINI_MODEL in .env (see estimate_cost, which warns on a miss).
     PRICING_PER_MODEL = {
+        # Groq
         "llama-3.3-70b-versatile": {
             "input": 0.00059,
             "output": 0.00079
@@ -159,6 +165,12 @@ class TokenCounter:
         "gemma2-9b-it": {
             "input": 0.0002,
             "output": 0.0002
+        },
+        # Gemini. "-latest" is a moving alias, so this is the published
+        # Flash-Lite rate at time of writing - re-check if the alias moves.
+        "gemini-flash-lite-latest": {
+            "input": 0.0001,
+            "output": 0.0004
         }
     }
 
@@ -166,7 +178,8 @@ class TokenCounter:
     TOKEN_LIMITS = {
         "llama-3.3-70b-versatile": 128_000,
         "llama-3.1-8b-instant": 128_000,
-        "gemma2-9b-it": 8_192
+        "gemma2-9b-it": 8_192,
+        "gemini-flash-lite-latest": 1_000_000
     }
 
     @staticmethod
@@ -234,6 +247,12 @@ class TokenCounter:
             float: Estimated cost in USD.
         """
         if model not in TokenCounter.PRICING_PER_MODEL:
+            # Warn loudly: silently returning 0.0 makes cost reports look
+            # complete while understating them, which is worse than no number.
+            logger.warning(
+                f"No pricing entry for model {model!r} - reporting $0.00 cost. "
+                f"Add it to TokenCounter.PRICING_PER_MODEL to get real figures."
+            )
             return 0.0
 
         pricing = TokenCounter.PRICING_PER_MODEL[model]
@@ -334,7 +353,6 @@ class LLMClient:
         self.config = config or LLMClientConfig()
         self.config.validate()
 
-        self.client = Groq(api_key=self.config.api_key)
         logger.info(f"LLM Client initialized with model: {self.config.model}")
 
     def generate(
@@ -362,7 +380,7 @@ class LLMClient:
         chat = ChatOpenAI(
             model=self.config.model,
             api_key=self.config.api_key,
-            base_url="https://api.groq.com/openai/v1",
+            base_url=GROQ_BASE_URL,
             temperature=temp,
             max_tokens=max_tok,
             timeout=self.config.timeout,
@@ -518,7 +536,6 @@ class AsyncLLMClient:
         self.config = config or LLMClientConfig()
         self.config.validate()
 
-        self.client = AsyncGroq(api_key=self.config.api_key)
         logger.info(f"Async LLM Client initialized with model: {self.config.model}")
 
     async def generate(
@@ -546,7 +563,7 @@ class AsyncLLMClient:
         chat = ChatOpenAI(
             model=self.config.model,
             api_key=self.config.api_key,
-            base_url="https://api.groq.com/openai/v1",
+            base_url=GROQ_BASE_URL,
             temperature=temp,
             max_tokens=max_tok,
             timeout=self.config.timeout,
@@ -680,23 +697,14 @@ class AsyncLLMClient:
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
 
 
-def _parse_gemini_response(payload: Dict, model: str, latency_ms: float) -> LLMResponse:
-    """Shared response parsing for the sync/async Gemini clients (OpenAI-compatible schema)."""
-    choice = payload["choices"][0]
-    usage = payload.get("usage", {})
+def parse_json_response(response: LLMResponse) -> Dict:
+    """
+    Parse a JSON body out of an LLM response, stripping markdown code fences.
 
-    return LLMResponse(
-        content=choice["message"]["content"],
-        model=model,
-        input_tokens=usage.get("prompt_tokens", 0),
-        output_tokens=usage.get("completion_tokens", 0),
-        finish_reason=choice.get("finish_reason", "stop"),
-        latency_ms=latency_ms
-    )
-
-
-def _parse_gemini_json(response: LLMResponse) -> Dict:
-    """Shared JSON-body parsing (markdown code fence stripping) for the Gemini clients."""
+    Public because callers that need the token/cost figures alongside the
+    parsed JSON must use `generate()` + this helper rather than
+    `generate_json()`, which discards the LLMResponse.
+    """
     json_str = response.content
 
     if "```json" in json_str:
@@ -722,12 +730,6 @@ class GeminiLLMClient:
         self.config = config or GeminiLLMClientConfig()
         self.config.validate()
 
-        self.client = httpx.Client(
-            base_url=GEMINI_BASE_URL,
-            headers={
-                "Authorization": f"Bearer {self.config.api_key}"
-            }
-        )
         logger.info(f"Gemini LLM Client initialized with model: {self.config.model}")
 
     def generate(
@@ -753,7 +755,7 @@ class GeminiLLMClient:
         chat = ChatOpenAI(
             model=self.config.model,
             api_key=self.config.api_key,
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+            base_url=GEMINI_BASE_URL,
             temperature=temp,
             max_tokens=max_tok,
             timeout=self.config.timeout,
@@ -821,7 +823,7 @@ class GeminiLLMClient:
     ) -> Dict:
         """Generate a JSON response from Gemini. Mirrors LLMClient.generate_json()."""
         response = self.generate(system_prompt, user_prompt, temperature, max_tokens)
-        return _parse_gemini_json(response)
+        return parse_json_response(response)
 
     def count_tokens(self, system_prompt: str, user_prompt: str) -> int:
         """Count tokens in prompts (estimation). Mirrors LLMClient.count_tokens()."""
@@ -849,12 +851,6 @@ class AsyncGeminiLLMClient:
         self.config = config or GeminiLLMClientConfig()
         self.config.validate()
 
-        self.client = httpx.AsyncClient(
-            base_url=GEMINI_BASE_URL,
-            headers={
-                "Authorization": f"Bearer {self.config.api_key}"
-            }
-        )
         logger.info(f"Async Gemini LLM Client initialized with model: {self.config.model}")
 
     async def generate(
@@ -880,7 +876,7 @@ class AsyncGeminiLLMClient:
         chat = ChatOpenAI(
             model=self.config.model,
             api_key=self.config.api_key,
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai",
+            base_url=GEMINI_BASE_URL,
             temperature=temp,
             max_tokens=max_tok,
             timeout=self.config.timeout,
@@ -949,7 +945,7 @@ class AsyncGeminiLLMClient:
     ) -> Dict:
         """Generate a JSON response asynchronously. Mirrors AsyncLLMClient.generate_json()."""
         response = await self.generate(system_prompt, user_prompt, temperature, max_tokens)
-        return _parse_gemini_json(response)
+        return parse_json_response(response)
 
 
 # ============ Singleton Instances (one per provider) ============

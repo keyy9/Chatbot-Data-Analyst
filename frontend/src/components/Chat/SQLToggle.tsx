@@ -37,8 +37,8 @@ export const SQLToggle: React.FC<SQLToggleProps> = ({ sql, executionTimeMs, rowC
           <div className="flex justify-between items-center text-xs text-text-faint font-mono">
             <span>
               SQL Dialect: PostgreSQL
-              {typeof executionTimeMs === "number" && ` Â· ${executionTimeMs.toFixed(0)}ms`}
-              {typeof rowCount === "number" && ` Â· ${rowCount} row${rowCount === 1 ? "" : "s"}`}
+              {typeof executionTimeMs === "number" && ` • ${executionTimeMs.toFixed(0)}ms`}
+              {typeof rowCount === "number" && ` • ${rowCount} row${rowCount === 1 ? "" : "s"}`}
             </span>
             <button
               onClick={handleCopy}

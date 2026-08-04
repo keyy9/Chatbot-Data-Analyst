@@ -19,7 +19,8 @@ from backend.ai.rbac.roles import Role
 from backend.ai.rbac.access_control import UserContext, get_access_control
 from backend.ai.rbac.user_lookup import verify_role
 from backend.ai.validators.sql_guard_rbac import get_sql_guard_rbac
-from backend.ai.utils.supabase_client import get_supabase_client, get_app_db_client
+from backend.ai.validators.write_intent import has_write_intent
+from backend.ai.utils.supabase_client import get_app_db_client
 from backend.ai.utils.supabase_schema_loader import get_supabase_schema_loader
 from backend.ai.utils.supabase_executor import get_supabase_query_executor
 from backend.ai.utils.system_prompt_store import get_active_system_prompt
@@ -28,7 +29,8 @@ from backend.ai.utils.chat_history import (
 )
 from backend.ai.prompts.clarification_prompt import get_clarification_prompt_manager
 from backend.ai.monitoring.logger import get_monitoring_logger, EventType
-from backend.ai.monitoring.query_log_repository import log_query
+from backend.ai.monitoring.query_log_repository import log_query, list_for_user as list_query_logs_for_user
+from backend.api.services import chat_session_service, notes_service
 
 router = APIRouter(prefix="/api/user", tags=["User Interface"])
 
@@ -46,6 +48,7 @@ class QuestionResponse(BaseModel):
     status: str
     generated_sql: str = ""
     explanation: str = ""
+    suggested_questions: list = []
     chart_recommendation: dict = {}
     plotly_figure: dict = {}
     insights: list = []
@@ -82,10 +85,11 @@ def _make_sql_executor_callback(sql_guard_rbac, query_executor, user_context, us
             raise PermissionError(validation["error"])
 
         max_rows = validation.get("max_rows")
-        if max_rows and "LIMIT" not in sql.upper():
-            sql = f"{sql} LIMIT {max_rows}"
+        clean_sql = sql.strip().rstrip(";")
+        if max_rows and "LIMIT" not in clean_sql.upper():
+            clean_sql = f"{clean_sql} LIMIT {max_rows}"
 
-        return query_executor.execute(sql)
+        return query_executor.execute(clean_sql)
 
     return execute_sql_callback
 
@@ -103,11 +107,49 @@ class ProviderCompareResult(BaseModel):
     options: list = []
     error: str = ""
     latency_ms: float = 0.0
+    # Token/cost travel with the answer so a comparison can weigh what each
+    # model charged, not only which one looked better.
+    input_tokens: int = 0
+    output_tokens: int = 0
+    estimated_cost: float = 0.0
 
 
 class CompareResponse(BaseModel):
     """Response for /ask/compare - one result per provider, keyed by provider name."""
     results: dict = {}
+
+
+def _log_compare_outcome(app_client, request, outcome: "ProviderCompareResult") -> None:
+    """
+    Record one provider's side of a comparison in `query_logs`.
+
+    Each provider gets its own row, tagged with `model_provider`, so the
+    per-provider analytics can average cost and latency over real questions
+    rather than only over the benchmark set.
+
+    The question text is prefixed so these rows are recognisable in the log
+    view: a comparison asks the same question twice, and without the marker the
+    duplicate looks like a bug.
+    """
+    log_query(
+        app_client,
+        user_id=request.user_id,
+        session_id=request.session_id,
+        nl_query=f"[compare] {request.question}",
+        sql_generated=outcome.generated_sql or None,
+        status="success" if outcome.status == "success" else (
+            "clarification_needed" if outcome.status == "clarification_needed" else "error"
+        ),
+        reject_reason=outcome.error or None,
+        model_provider=outcome.provider,
+        llm_usage={
+            "model_name": outcome.model_name,
+            "input_tokens": outcome.input_tokens,
+            "output_tokens": outcome.output_tokens,
+            "estimated_cost": outcome.estimated_cost,
+            "llm_latency_ms": outcome.latency_ms,
+        },
+    )
 
 
 def _run_pipeline_for_provider(
@@ -133,6 +175,7 @@ def _run_pipeline_for_provider(
         )
         latency_ms = (time.time() - start) * 1000
         status = result.get("status", "error")
+        usage = result.get("metadata") or {}
 
         if status == "success":
             return ProviderCompareResult(
@@ -144,7 +187,10 @@ def _run_pipeline_for_provider(
                 chart_recommendation=result.get("chart_recommendation") or {},
                 data=result.get("data") or [],
                 columns=result.get("columns") or [],
-                latency_ms=latency_ms
+                latency_ms=latency_ms,
+                input_tokens=usage.get("input_tokens", 0),
+                output_tokens=usage.get("output_tokens", 0),
+                estimated_cost=usage.get("estimated_cost", 0.0)
             )
         if status == "clarification_needed":
             return ProviderCompareResult(
@@ -153,14 +199,20 @@ def _run_pipeline_for_provider(
                 status=status,
                 explanation=result.get("question", ""),
                 options=result.get("options") or [],
-                latency_ms=latency_ms
+                latency_ms=latency_ms,
+                input_tokens=usage.get("input_tokens", 0),
+                output_tokens=usage.get("output_tokens", 0),
+                estimated_cost=usage.get("estimated_cost", 0.0)
             )
         return ProviderCompareResult(
             provider=provider,
             model_name=model_name,
             status="error",
             error=result.get("error", "Failed to answer question"),
-            latency_ms=latency_ms
+            latency_ms=latency_ms,
+            input_tokens=usage.get("input_tokens", 0),
+            output_tokens=usage.get("output_tokens", 0),
+            estimated_cost=usage.get("estimated_cost", 0.0)
         )
     except Exception as e:
         return ProviderCompareResult(
@@ -169,19 +221,6 @@ def _run_pipeline_for_provider(
             error=str(e),
             latency_ms=(time.time() - start) * 1000
         )
-
-
-def _check_write_intent(question: str) -> bool:
-    q = question.lower().strip()
-    write_verbs = ['update', 'delete', 'insert', 'create', 'drop', 'alter', 'truncate']
-    if any(q.startswith(verb) for verb in write_verbs):
-        return True
-    
-    change_patterns = ['change the', 'change total', 'change count', 'change price', 'change status', 'modify the']
-    if any(pattern in q for pattern in change_patterns) and ('to' in q or 'from' in q):
-        return True
-        
-    return False
 
 
 @router.post("/ask", response_model=QuestionResponse)
@@ -193,14 +232,31 @@ async def ask_question(request: QuestionRequest):
     """
     _validate_provider(request.model_provider)
 
-    if _check_write_intent(request.question):
-        raise HTTPException(
-            status_code=403,
-            detail="I detected a request to modify database records, but you are currently in Read-Only Mode. To perform write operations (INSERT, UPDATE, DELETE), please switch to the Admin Chat page."
-        )
-
-    business_client = get_supabase_client()  # the data being asked about
     app_client = get_app_db_client()  # this app's own control-plane DB
+
+    # A refused request is still a question the user asked, so it belongs in
+    # the log. Recorded before raising - otherwise the only queries missing
+    # from the audit trail would be the ones someone tried to write with.
+    if has_write_intent(request.question):
+        refusal = (
+            "I detected a request to modify database records, but you are currently in "
+            "Read-Only Mode. To perform write operations (INSERT, UPDATE, DELETE), "
+            "please switch to the Admin Chat page."
+        )
+        log_query(
+            app_client,
+            user_id=request.user_id,
+            # No session_id: the refusal happens before `ensure_session`, and
+            # query_logs.session_id is a FK - naming a row that doesn't exist
+            # yet would fail the insert and lose the record entirely.
+            session_id=None,
+            nl_query=request.question,
+            sql_generated=None,
+            status="rejected",
+            reject_reason="write_intent_in_read_only_mode",
+            model_provider=request.model_provider,
+        )
+        raise HTTPException(status_code=403, detail=refusal)
 
     # ============ Verify caller (soft: never block a read on a DB hiccup) ============
     verify_role(app_client, request.user_id, allowed_roles=("user", "admin"), hard=False)
@@ -227,7 +283,9 @@ async def ask_question(request: QuestionRequest):
     ensure_session(app_client, request.session_id, request.user_id)
 
     # ============ Multi-turn: merge a clarification answer with the original question ============
-    recent_messages = get_recent_messages(app_client, request.session_id)
+    # Keep the memory window focused (~10 turns): enough for a flowing
+    # conversation, without bloating the prompt with an entire long session.
+    recent_messages = get_recent_messages(app_client, request.session_id, limit=20)
     effective_question = resolve_follow_up(
         recent_messages,
         request.question,
@@ -256,6 +314,18 @@ async def ask_question(request: QuestionRequest):
             check_ambiguity=not is_follow_up
         )
     except Exception as e:
+        # A crash mid-pipeline is exactly the case worth having in the log, so
+        # record it before surfacing the 500 rather than losing the question.
+        log_query(
+            app_client,
+            user_id=request.user_id,
+            session_id=request.session_id,
+            nl_query=request.question,
+            sql_generated=None,
+            status="error",
+            reject_reason=f"pipeline_error: {str(e)[:400]}",
+            model_provider=request.model_provider,
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
     # ============ Persist to query_logs + chat_messages (best-effort) ============
@@ -269,7 +339,9 @@ async def ask_question(request: QuestionRequest):
         sql_generated=result.get("generated_sql"),
         status=status,
         reject_reason=result.get("error"),
-        exec_time_ms=(result.get("metadata") or {}).get("query_execution_time_ms")
+        exec_time_ms=(result.get("metadata") or {}).get("query_execution_time_ms"),
+        model_provider=request.model_provider,
+        llm_usage=result.get("metadata") or {}
     )
 
     add_message(app_client, request.session_id, role="user", content=request.question)
@@ -297,7 +369,8 @@ async def ask_question(request: QuestionRequest):
             request.session_id,
             role="assistant",
             content=result.get("question", ""),
-            needs_clarification=True
+            needs_clarification=True,
+            result_json=result.get("options") or []
         )
         return QuestionResponse(
             status=status,
@@ -308,7 +381,14 @@ async def ask_question(request: QuestionRequest):
         )
     else:
         add_message(app_client, request.session_id, role="assistant", content=result.get("error", "An error occurred."))
-        raise HTTPException(status_code=422, detail=result.get("error", "Failed to answer question"))
+        return {
+            "status": "error",
+            "explanation": result.get("error", "Failed to answer question."),
+            "data": [],
+            "columns": [],
+            "model_provider": request.model_provider,
+            "model_name": model_name
+        }
 
     return {**result, "model_provider": request.model_provider, "model_name": model_name}
 
@@ -318,11 +398,16 @@ async def ask_question_compare(request: QuestionRequest):
     """
     Ask a natural language question and get answers from BOTH LLM
     providers side by side (USER: read-only), for per-query model
-    comparison. Runs concurrently. Not persisted to chat_history/query_logs
-    - this is a side, on-demand comparison, not part of the primary
-    conversation thread (the regular /ask call already persisted that turn).
+    comparison. Runs concurrently.
+
+    Not added to chat_history - this is a side comparison, not a turn in the
+    conversation, and the regular /ask call already persisted that turn.
+
+    It IS written to query_logs, one row per provider. Without that every
+    comparison vanished when the modal closed, so no amount of real usage could
+    ever answer "which model is actually cheaper/faster for our questions?" -
+    the per-provider analytics had nothing to aggregate.
     """
-    business_client = get_supabase_client()
     app_client = get_app_db_client()
 
     verify_role(app_client, request.user_id, allowed_roles=("user", "admin"), hard=False)
@@ -367,6 +452,9 @@ async def ask_question_compare(request: QuestionRequest):
         )
     )
 
+    for outcome in (groq_result, gemini_result):
+        _log_compare_outcome(app_client, request, outcome)
+
     return CompareResponse(results={"groq": groq_result, "gemini": gemini_result})
 
 
@@ -384,31 +472,7 @@ async def get_my_query_logs(user_id: str, limit: int = 100):
 
     verify_role(app_client, user_id, allowed_roles=("user", "admin"), hard=False)
 
-    rows, _, _ = app_client.execute_read(
-        """
-        SELECT id, nl_query, sql_generated, status, reject_reason, exec_time_ms, created_at
-        FROM query_logs
-        WHERE user_id = %s
-        ORDER BY created_at DESC
-        LIMIT %s
-        """,
-        (user_id, limit)
-    )
-
-    return {
-        "logs": [
-            {
-                "id": str(row["id"]),
-                "question": row["nl_query"],
-                "generatedSql": row["sql_generated"] or "",
-                "executionTimeMs": row["exec_time_ms"] or 0,
-                "status": "Success" if row["status"] == "success" else "Failed",
-                "timestamp": row["created_at"].isoformat(),
-                "errorDetail": row["reject_reason"]
-            }
-            for row in rows
-        ]
-    }
+    return {"logs": list_query_logs_for_user(app_client, user_id, limit)}
 
 
 @router.get("/capabilities")
@@ -437,68 +501,22 @@ class NoteRequest(BaseModel):
 @router.get("/notes")
 async def get_user_notes(user_id: str):
     """Retrieve all saved observations/notes for a user (Client/Admin)."""
-    app_client = get_app_db_client()
-    try:
-        rows, _, _ = app_client.execute_read(
-            "SELECT id, title, content, session_id as \"sessionId\", last_modified as \"lastModified\" "
-            "FROM user_notes WHERE user_id = %s ORDER BY last_modified DESC",
-            (user_id,)
-        )
-        return {"notes": rows}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    return {"notes": notes_service.list_for_user(user_id)}
 
 
 @router.post("/notes")
 async def save_user_note(request: NoteRequest):
     """Upsert (Insert or Update) a user note/observation."""
-    app_client = get_app_db_client()
-    try:
-        # Check if user exists
-        user_check, _, _ = app_client.execute_read(
-            "SELECT id FROM users WHERE id = %s AND deleted_at IS NULL",
-            (request.user_id,)
-        )
-        if not user_check:
-            raise HTTPException(status_code=404, detail="User account not found")
-
-        # Perform Upsert using PostgreSQL INSERT ... ON CONFLICT
-        app_client.execute_write(
-            """
-            INSERT INTO user_notes (id, user_id, title, content, session_id, last_modified)
-            VALUES (%s, %s, %s, %s, %s, %s)
-            ON CONFLICT (id) DO UPDATE SET
-                title = EXCLUDED.title,
-                content = EXCLUDED.content,
-                session_id = EXCLUDED.session_id,
-                last_modified = EXCLUDED.last_modified
-            RETURNING id
-            """,
-            (request.id, request.user_id, request.title, request.content, request.session_id, request.last_modified)
-        )
-        return {"status": "success", "note_id": request.id}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    return notes_service.save(
+        request.id, request.user_id, request.title,
+        request.content, request.session_id, request.last_modified
+    )
 
 
 @router.delete("/notes/{note_id}")
 async def delete_user_note(note_id: str, user_id: str):
-    """Delete a user note/observation."""
-    app_client = get_app_db_client()
-    try:
-        rows, count, _ = app_client.execute_write(
-            "DELETE FROM user_notes WHERE id = %s AND user_id = %s RETURNING id",
-            (note_id, user_id)
-        )
-        if count == 0:
-            raise HTTPException(status_code=404, detail="Note not found or does not belong to you")
-        return {"status": "success", "message": "Note deleted"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    """Delete a user note/observation (idempotent - see delete_user_session)."""
+    return notes_service.delete(note_id, user_id)
 
 
 class CreateSessionRequest(BaseModel):
@@ -516,132 +534,85 @@ class RenameSessionRequest(BaseModel):
 @router.get("/sessions")
 async def get_user_sessions(user_id: str):
     """Retrieve all chat sessions for a user (Client/Admin)."""
-    app_client = get_app_db_client()
-    try:
-        rows, _, _ = app_client.execute_read(
-            "SELECT id, title, created_at as \"createdAt\" "
-            "FROM chat_sessions WHERE user_id = %s ORDER BY created_at DESC",
-            (user_id,)
-        )
-        return {"sessions": [{**row, "id": str(row["id"]), "createdAt": int(row["createdAt"].timestamp() * 1000)} for row in rows]}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    return {"sessions": chat_session_service.list_for_user(user_id)}
 
 
 @router.post("/sessions")
 async def create_user_session(request: CreateSessionRequest):
     """Register or save a new chat session in the database."""
-    app_client = get_app_db_client()
-    try:
-        app_client.execute_write(
-            "INSERT INTO chat_sessions (id, user_id, title) VALUES (%s, %s, %s) "
-            "ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title RETURNING id",
-            (request.id, request.user_id, request.title)
-        )
-        return {"status": "success", "session_id": request.id}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    return chat_session_service.create(request.id, request.user_id, request.title)
 
 
 @router.post("/sessions/rename")
 async def rename_user_session(request: RenameSessionRequest):
     """Rename an existing chat session."""
-    app_client = get_app_db_client()
-    try:
-        rows, count, _ = app_client.execute_write(
-            "UPDATE chat_sessions SET title = %s WHERE id = %s AND user_id = %s RETURNING id",
-            (request.title, request.id, request.user_id)
-        )
-        if count == 0:
-            raise HTTPException(status_code=404, detail="Session not found or does not belong to you")
-        return {"status": "success"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    return chat_session_service.rename(request.id, request.user_id, request.title)
 
 
 @router.delete("/sessions/{session_id}")
 async def delete_user_session(session_id: str, user_id: str):
-    """Delete a chat session and all its messages."""
-    app_client = get_app_db_client()
-    try:
-        # First delete messages
-        app_client.execute_write(
-            "DELETE FROM chat_messages WHERE session_id = %s",
-            (session_id,)
-        )
-        rows, count, _ = app_client.execute_write(
-            "DELETE FROM chat_sessions WHERE id = %s AND user_id = %s RETURNING id",
-            (session_id, user_id)
-        )
-        if count == 0:
-            raise HTTPException(status_code=404, detail="Session not found or does not belong to you")
-        return {"status": "success"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    """
+    Delete a chat session and all its messages (idempotent).
+
+    Deleting is idempotent: whether or not a matching DB row exists, the
+    caller's intent (this session should be gone) is satisfied on return.
+    A local-only session that was never persisted - including one with a
+    legacy non-UUID id - therefore deletes cleanly from the UI instead of
+    reporting a spurious failure.
+    """
+    return chat_session_service.delete(session_id, user_id)
 
 
 @router.get("/sessions/{session_id}/messages")
 async def get_session_messages(session_id: str, user_id: str):
     """Retrieve formatted message history for a chat session."""
-    import json
+    return {"messages": chat_session_service.get_messages(session_id, user_id)}
+
+
+@router.get("/tables/{table_name}/rows")
+async def get_table_rows(table_name: str, user_id: str, limit: int = 100, offset: int = 0):
+    """
+    Browse raw rows from any table in the business database (read-only).
+
+    The client supplies only a table name (validated against the live
+    DATABASE_URL schema, never raw SQL), so this can never be used to run
+    arbitrary queries. Every table physically present in DATABASE_URL is
+    browsable here - unlike the chatbot, which only ever sees business
+    tables (app-internal tables are hidden from its schema context).
+    """
     app_client = get_app_db_client()
-    
-    # Verify session ownership
-    sess_check, _, _ = app_client.execute_read(
-        "SELECT id FROM chat_sessions WHERE id = %s AND user_id = %s",
-        (session_id, user_id)
-    )
-    if not sess_check:
-        raise HTTPException(status_code=404, detail="Session not found or does not belong to you")
+    try:
+        verify_role(app_client, user_id, allowed_roles=("user", "admin"), hard=True)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+    if limit < 1 or limit > 1000:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 1000")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be non-negative")
+
+    schema_loader = get_supabase_schema_loader()
+    available_tables = schema_loader.get_available_tables()
+    if table_name not in available_tables:
+        raise HTTPException(status_code=404, detail=f"Table '{table_name}' not found")
 
     try:
-        rows, _, _ = app_client.execute_read(
-            "SELECT id, role, content as text, sql_generated as sql, result_json, chart_type, needs_clarification, created_at as timestamp "
-            "FROM chat_messages WHERE session_id = %s ORDER BY created_at ASC",
-            (session_id,)
+        query_executor = get_supabase_query_executor()
+        sql = f"SELECT * FROM {table_name} LIMIT {limit} OFFSET {offset}"
+        rows, columns, exec_time = query_executor.execute(sql)
+
+        log_query(
+            app_client,
+            user_id=user_id,
+            session_id=None,
+            nl_query=f"[raw table view] {table_name}",
+            sql_generated=sql,
+            status="success",
+            exec_time_ms=exec_time
         )
-        
-        formatted = []
-        for r in rows:
-            res_json = r.get("result_json")
-            if isinstance(res_json, str):
-                try:
-                    res_json = json.loads(res_json)
-                except:
-                    res_json = None
-            
-            # Format preview if rows exist
-            result_preview = None
-            if res_json and isinstance(res_json, list) and len(res_json) > 0:
-                cols = list(res_json[0].keys()) if isinstance(res_json[0], dict) else []
-                result_preview = {"columns": cols, "rows": res_json}
-            
-            # Setup chartData if type is specified
-            chart_data = None
-            if r.get("chart_type") and res_json:
-                chart_data = {"type": r["chart_type"], "data": res_json}
 
-            status = "Success"
-            if r["role"] == "assistant" and not r["sql"] and not r["needs_clarification"] and "error" in r["text"].lower():
-                status = "Failed"
-
-            formatted.append({
-                "id": str(r["id"]),
-                "sender": "user" if r["role"] == "user" else "ai",
-                "text": r["text"],
-                "timestamp": int(r["timestamp"].timestamp() * 1000),
-                "status": status,
-                "sql": r["sql"],
-                "isClarification": r["needs_clarification"],
-                "clarificationOptions": res_json if r["needs_clarification"] else None,
-                "resultPreview": result_preview,
-                "chartData": chart_data
-            })
-            
-        return {"messages": formatted}
+        return {"status": "success", "data": rows, "columns": columns, "table": table_name}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")

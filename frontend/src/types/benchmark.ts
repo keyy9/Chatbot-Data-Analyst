@@ -29,6 +29,29 @@ export interface BenchmarkRunHistory {
   avgResponseTimeMs: number;
 }
 
+/**
+ * One provider's newest benchmark run.
+ *
+ * Every run scores the same questions against the same gold SQL, so accuracy
+ * is comparable across providers. Cost and latency travel with it because a
+ * model that is more accurate but far more expensive is a different decision.
+ */
+export interface ProviderBenchmark {
+  model_provider: string;
+  model_name: string;
+  run_at: string;
+  total_questions: number;
+  correct: number;
+  partial: number;
+  wrong: number;
+  accuracy_score: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  estimated_cost: number;
+  avg_latency_ms: number;
+}
+
 export type PipelineOutcome = "success" | "clarification" | "blocked";
 
 export interface PipelineEvalClassMetric {

@@ -14,6 +14,15 @@ export interface ChatSession {
 
 export type ModelProvider = "groq" | "gemini";
 
+export interface DataInsight {
+  type: string;
+  title: string;
+  description: string;
+  value?: any;
+  context?: string;
+  confidence?: number;
+}
+
 export interface Message {
   id: string;
   sender: "user" | "ai";
@@ -37,6 +46,8 @@ export interface Message {
   };
   isClarification?: boolean;
   clarificationOptions?: string[];
+  suggestedQuestions?: string[];
+  insights?: DataInsight[];
   /** A generated write (INSERT/UPDATE/DELETE) awaiting explicit confirmation. Admin write flow only. */
   pendingConfirmation?: {
     token: string;
@@ -56,12 +67,7 @@ export interface Note {
   content: string;
   sessionId: string; // link to chat session (optional or empty)
   lastModified: number;
+  isPinned?: boolean;
+  category?: string;
 }
 
-export interface UserProfile {
-  email: string;
-  name: string;
-  role: "User";
-  createdAt: string;
-  recentActivities: string[];
-}

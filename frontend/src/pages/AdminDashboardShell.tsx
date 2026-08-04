@@ -1,23 +1,14 @@
 import React, { useState, useMemo, useEffect, useCallback } from "react";
 import { Navigate } from "react-router-dom";
 
-import {
-  initialQueryLogs,
-  initialBenchmarkQuestions,
-  initialUserActivities,
-  queryVolumeTrend,
-  benchmarkAccuracyTrend,
-} from "../data/mockData";
-
 import type { QueryLog } from "../types/query";
-import type { BenchmarkQuestion } from "../types/benchmark";
 import type { ManagedUser, UserActivity } from "../types/user";
 
 import type { Message as ChatMessage } from "../types";
 import { useAuth } from "../hooks/useAuth";
 import { useAuthStore } from "../store/authStore";
 import { useUiStore } from "../store/uiStore";
-import { adminApi, userManagementApi, ApiError, type CompareResponse } from "../lib/apiClient";
+import { adminApi, userApi, userManagementApi, analyticsApi, evaluationApi, ApiError, type CompareResponse, type AnalyticsSummary } from "../lib/apiClient";
 import { mapChartRecommendation, SUPPORTED_CHART_TYPES } from "../lib/chartMapping";
 import { mapManagedUser, toApiStatus } from "../lib/userMapping";
 import { ComparisonModal } from "../components/Chat/ComparisonModal";
@@ -73,28 +64,20 @@ export default function App() {
     error: string | null;
   } | null>(null);
 
-  // Simulated Database and Log States
+  // All admin data is real (from the backend) - no mock data anywhere.
   const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([]);
   const [managedUsersLoading, setManagedUsersLoading] = useState(true);
-  const [queryLogs, setQueryLogs] = useState<QueryLog[]>(initialQueryLogs);
 
-  // Real query log history (separate from the mock `queryLogs` state above,
-  // which the Dashboard KPI cards still derive from) - fetched once from
-  // the actual query_logs table for the Query Logs page.
+  // Real query log history from the query_logs table.
   const [realQueryLogs, setRealQueryLogs] = useState<QueryLog[]>([]);
   const [realQueryLogsLoading, setRealQueryLogsLoading] = useState(true);
-  const [benchmarkQuestions, setBenchmarkQuestions] = useState<BenchmarkQuestion[]>(initialBenchmarkQuestions);
-  const [userActivities, setUserActivities] = useState<UserActivity[]>(initialUserActivities);
-  const [accuracyHistory, setAccuracyHistory] = useState(benchmarkAccuracyTrend);
 
-  // Simulation Status States
-  const [apiError, setApiError] = useState(false);
-  const [emptySystemState, setEmptySystemState] = useState(false);
-
-  // Testing simulation progress states
-  const [isTesting] = useState(false);
-  // const [testingProgress, setTestingProgress] = useState(0);
-  // const [testingCurrentIndex, setTestingCurrentIndex] = useState(-1);
+  // Real dashboard analytics (aggregated from query_logs + benchmark evals).
+  const [analyticsSummary, setAnalyticsSummary] = useState<AnalyticsSummary | null>(null);
+  const [benchmarkAccuracy, setBenchmarkAccuracy] = useState(0);
+  const [benchmarkEvalResults, setBenchmarkEvalResults] = useState<{ question: string; status: "correct" | "partial" | "wrong" }[]>([]);
+  const [accuracyHistory, setAccuracyHistory] = useState<{ runId: string; accuracy: number; timestamp: string; avgResponseTimeMs: number }[]>([]);
+  const [queryVolume, setQueryVolume] = useState<{ date: string; queries: number; successful: number }[]>([]);
 
   // KPI modal trigger state
   const [activeKpiModal, setActiveKpiModal] = useState<
@@ -110,19 +93,198 @@ export default function App() {
   // Detailed inspect drawer trigger state
   const [selectedLog, setSelectedLog] = useState<QueryLog | null>(null);
 
-  // Admin Chat States
+  // Admin Chat States & Persistent Sessions
   const { user: authUser } = useAuthStore();
-  const [adminChatSessionId] = useState(() => crypto.randomUUID());
+  const [adminSessions, setAdminSessions] = useState<{ id: string; title: string; createdAt: number }[]>([]);
+  const [activeAdminSessionId, setActiveAdminSessionId] = useState<string | null>(null);
 
-  // Fetch real query log history once on mount
+  // Initialize and load persistent Admin Sessions from DB / LocalStorage
   useEffect(() => {
     if (!authUser?.userId) return;
+    const userId = authUser.userId;
+    const storageKey = `admin_chat_sessions_${userId}`;
+
+    userApi.getSessions(userId)
+      .then((res) => {
+        let loaded = res.sessions || [];
+
+        // If DB returns empty, check local storage
+        if (loaded.length === 0) {
+          const saved = localStorage.getItem(storageKey);
+          if (saved) {
+            try {
+              const parsed = JSON.parse(saved);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                loaded = parsed;
+              }
+            } catch (err) {}
+          }
+        }
+
+        // If still empty, create initial welcome admin session
+        if (loaded.length === 0) {
+          const initialId = crypto.randomUUID();
+          const initialSess = { id: initialId, title: "Admin Session 1", createdAt: Date.now() };
+          loaded = [initialSess];
+          userApi.createSession(userId, initialId, initialSess.title).catch((e) => console.error("Failed to create admin session:", e));
+        }
+
+        setAdminSessions(loaded);
+        setActiveAdminSessionId((prev) => prev || loaded[0].id);
+        localStorage.setItem(storageKey, JSON.stringify(loaded));
+      })
+      .catch((err) => {
+        console.error("Failed to load admin sessions from DB:", err);
+        const saved = localStorage.getItem(storageKey);
+        if (saved) {
+          try {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              setAdminSessions(parsed);
+              setActiveAdminSessionId(parsed[0].id);
+            }
+          } catch (e) {}
+        }
+      });
+  }, [authUser?.userId]);
+
+  // Load chat messages whenever activeAdminSessionId changes
+  useEffect(() => {
+    if (!authUser?.userId || !activeAdminSessionId) return;
+    setIsChatLoading(true);
+    userApi.getSessionMessages(authUser.userId, activeAdminSessionId)
+      .then((res) => {
+        if (res.messages && res.messages.length > 0) {
+          setChatMessages(res.messages);
+        } else {
+          setChatMessages([
+            {
+              id: "welcome",
+              sender: "ai",
+              text: "Hello! I am your AI Data Analyst assistant with administrative database privileges. Ask me anything about our database, or perform data operations (INSERT, UPDATE, DELETE). For example, try asking 'Show all products in the store' or 'Delete all orders with cancelled status'.",
+              timestamp: Date.now(),
+            },
+          ]);
+        }
+      })
+      .catch(() => {
+        setChatMessages([
+          {
+            id: "welcome",
+            sender: "ai",
+            text: "Hello! I am your AI Data Analyst assistant with administrative database privileges. Ask me anything about our database, or perform data operations (INSERT, UPDATE, DELETE). For example, try asking 'Show all products in the store' or 'Delete all orders with cancelled status'.",
+            timestamp: Date.now(),
+          },
+        ]);
+      })
+      .finally(() => setIsChatLoading(false));
+  }, [authUser?.userId, activeAdminSessionId]);
+
+  // Create New Admin Session
+  const handleCreateAdminSession = useCallback(() => {
+    if (!authUser?.userId) return;
+    const userId = authUser.userId;
+    const newId = crypto.randomUUID();
+    const newTitle = `Admin Session ${adminSessions.length + 1}`;
+    const newSess = { id: newId, title: newTitle, createdAt: Date.now() };
+
+    setAdminSessions((prev) => {
+      const updated = [newSess, ...prev];
+      localStorage.setItem(`admin_chat_sessions_${userId}`, JSON.stringify(updated));
+      return updated;
+    });
+    setActiveAdminSessionId(newId);
+    setChatMessages([
+      {
+        id: "welcome",
+        sender: "ai",
+        text: "Hello! I am your AI Data Analyst assistant with administrative database privileges. Ask me anything about our database, or perform data operations (INSERT, UPDATE, DELETE). For example, try asking 'Show all products in the store' or 'Delete all orders with cancelled status'.",
+        timestamp: Date.now(),
+      },
+    ]);
+    userApi.createSession(userId, newId, newTitle).catch((e) => console.error("Failed to save admin session:", e));
+  }, [authUser?.userId, adminSessions.length]);
+
+  // Delete Admin Session
+  const handleDeleteAdminSession = useCallback((sessionId: string) => {
+    if (!authUser?.userId) return;
+    const userId = authUser.userId;
+
+    userApi.deleteSession(userId, sessionId).catch(() => {});
+    setAdminSessions((prev) => {
+      const filtered = prev.filter((s) => s.id !== sessionId);
+      localStorage.setItem(`admin_chat_sessions_${userId}`, JSON.stringify(filtered));
+      if (activeAdminSessionId === sessionId) {
+        setActiveAdminSessionId(filtered[0]?.id || null);
+      }
+      return filtered;
+    });
+  }, [authUser?.userId, activeAdminSessionId]);
+
+  // Rename Admin Session
+  const handleRenameAdminSession = useCallback((sessionId: string, newTitle: string) => {
+    if (!authUser?.userId) return;
+    const userId = authUser.userId;
+
+    setAdminSessions((prev) => {
+      const updated = prev.map((s) => (s.id === sessionId ? { ...s, title: newTitle } : s));
+      localStorage.setItem(`admin_chat_sessions_${userId}`, JSON.stringify(updated));
+      return updated;
+    });
+    userApi.renameSession(userId, sessionId, newTitle).catch((e) => console.error("Failed to rename admin session:", e));
+  }, [authUser?.userId]);
+
+  // Fetch real query log history
+  const loadQueryLogs = useCallback(() => {
+    if (!authUser?.userId) return;
+    setRealQueryLogsLoading(true);
     adminApi
       .getQueryLogs(authUser.userId)
       .then((res) => setRealQueryLogs(res.logs))
       .catch(() => setRealQueryLogs([]))
       .finally(() => setRealQueryLogsLoading(false));
   }, [authUser?.userId]);
+
+  useEffect(() => { loadQueryLogs(); }, [loadQueryLogs]);
+
+  // Fetch real dashboard analytics (summary + query volume + benchmark accuracy/history)
+  const loadAnalytics = useCallback(() => {
+    if (!authUser?.userId) return;
+    const uid = authUser.userId;
+    analyticsApi.getSummary(uid).then(setAnalyticsSummary).catch(() => setAnalyticsSummary(null));
+    analyticsApi.getQueryVolume(uid).then((r) => setQueryVolume(r.trend)).catch(() => setQueryVolume([]));
+    evaluationApi.getLatestBenchmarkEval(uid)
+      .then((r) => {
+        setBenchmarkAccuracy(Math.round((r.accuracy_score || 0) * 100));
+        setBenchmarkEvalResults(r.results || []);
+      })
+      .catch(() => { setBenchmarkAccuracy(0); setBenchmarkEvalResults([]); }); // 404 when no runs yet
+    evaluationApi.getBenchmarkEvalHistory(uid).then((r) => setAccuracyHistory(r.history)).catch(() => setAccuracyHistory([]));
+  }, [authUser?.userId]);
+
+  useEffect(() => { loadAnalytics(); }, [loadAnalytics]);
+
+  // Responsive: auto-collapse the sidebar on small screens.
+  useEffect(() => {
+    const onResize = () => { if (window.innerWidth < 1024) setSidebarCollapsed(true); };
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // User Activity is the real managed-user list, projected into the activity shape.
+  const userActivities: UserActivity[] = useMemo(
+    () => managedUsers.map((u) => ({
+      id: u.id,
+      name: u.username,
+      email: u.email,
+      totalQueries: u.totalQueries,
+      loginTime: u.lastActive,
+      lastActivity: u.lastActive,
+      successRate: u.successRate * 100, // ManagedUser.successRate is 0-1; page renders 0-100
+    })),
+    [managedUsers]
+  );
 
   // Real user management - fetch once on mount, refetch after every mutation
   // rather than patching local state, so the list (and its query-stat
@@ -194,7 +356,6 @@ export default function App() {
     }
   };
 
-  const [chatInput, setChatInput] = useState("");
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
     {
@@ -213,75 +374,43 @@ export default function App() {
   const [userMgmtSortOrder, setUserMgmtSortOrder] = useState<"asc" | "desc">("asc");
   const [userMgmtCurrentPage, setUserMgmtCurrentPage] = useState(1);
 
-  // Reset all simulated database states to defaults
-  const handleResetData = () => {
-    setQueryLogs(initialQueryLogs);
-    setBenchmarkQuestions(initialBenchmarkQuestions);
-    setUserActivities(initialUserActivities);
-    setAccuracyHistory(benchmarkAccuracyTrend);
-    setEmptySystemState(false);
-    setApiError(false);
-    showToast("🔄 Database and simulation data reset successfully!");
-  };
-
-  // Global calculations based on state (Dashboard Cards)
+  // Dashboard KPI cards - all from real backend data (analytics summary +
+  // benchmark accuracy + managed users).
   const dashboardStats = useMemo(() => {
-    if (emptySystemState) {
-      return {
-        totalQueries: 0,
-        successfulQueries: 0,
-        failedQueries: 0,
-        avgResponseTime: 0,
-        overallAccuracy: 0,
-        activeSessions: 0,
-      };
-    }
-
-    const total = queryLogs.length;
-    const successful = queryLogs.filter((q) => q.status === "Success").length;
-    const failed = queryLogs.filter((q) => q.status === "Failed").length;
-
-    const sumResponse = queryLogs.reduce((acc, q) => acc + q.executionTimeMs, 0);
-    const avgResponse = total > 0 ? Math.round(sumResponse / total) : 0;
-
-    // Accuracy based on benchmark questions that are evaluated
-    const testedQuestions = benchmarkQuestions.filter(
-      (bq) => bq.result && bq.result !== "Pending"
-    );
-    const correct = testedQuestions.filter((bq) => bq.result === "Correct").length;
-    const accuracy =
-      testedQuestions.length > 0
-        ? Math.round((correct / testedQuestions.length) * 100)
-        : 0;
-
     const activeManagedCount = managedUsers.filter((u) => u.status === "Active").length;
 
     return {
-      totalQueries: total,
-      successfulQueries: successful,
-      failedQueries: failed,
-      avgResponseTime: avgResponse,
-      overallAccuracy: accuracy,
+      totalQueries: analyticsSummary?.total_queries ?? 0,
+      successfulQueries: analyticsSummary?.successful_queries ?? 0,
+      failedQueries: analyticsSummary?.failed_queries ?? 0,
+      avgResponseTime: Math.round(analyticsSummary?.avg_execution_time_ms ?? 0),
+      overallAccuracy: benchmarkAccuracy,
       activeSessions: activeManagedCount,
     };
-  }, [queryLogs, benchmarkQuestions, userActivities, managedUsers, emptySystemState]);
+  }, [analyticsSummary, benchmarkAccuracy, managedUsers]);
 
   // Admin Chat Submit Handler - real NL-to-SQL pipeline via /api/admin/ask
-  const handleAdminChatSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!chatInput || apiError) return;
+  const submitAdminChatQuery = async (queryText: string) => {
+    if (!queryText.trim() || isChatLoading) return;
 
     const userId = authUser?.userId;
-    const userQuestion = chatInput;
+
+    // Auto-rename session on first question if title is generic
+    if (activeAdminSessionId && userId) {
+      const activeSess = adminSessions.find((s) => s.id === activeAdminSessionId);
+      if (activeSess && (activeSess.title.startsWith("Admin Session ") || activeSess.title.startsWith("New Chat"))) {
+        const autoTitle = queryText.length > 30 ? `${queryText.slice(0, 30)}...` : queryText;
+        handleRenameAdminSession(activeAdminSessionId, autoTitle);
+      }
+    }
 
     const userMsg: ChatMessage = {
       id: `msg-${Date.now()}-user`,
       sender: "user",
-      text: userQuestion,
+      text: queryText,
       timestamp: Date.now(),
     };
     setChatMessages((prev) => [...prev, userMsg]);
-    setChatInput("");
 
     if (!userId) {
       setChatMessages((prev) => [
@@ -300,7 +429,8 @@ export default function App() {
     setIsChatLoading(true);
 
     try {
-      const res = await adminApi.ask(userQuestion, userId, adminChatSessionId, modelProvider);
+      const currentSessionId = activeAdminSessionId || "admin-default-session";
+      const res = await adminApi.ask(queryText, userId, currentSessionId, modelProvider);
 
       let aiMsg: ChatMessage;
 
@@ -341,6 +471,8 @@ export default function App() {
           sql: res.generated_sql,
           message: `Query OK, ${res.data.length} row(s) returned.`,
           resultPreview: res.data.length > 0 ? { columns: res.columns, rows: res.data } : undefined,
+          suggestedQuestions: (res as any).suggested_questions,
+          insights: (res as any).insights,
           chartData: mapChartRecommendation(
             (res.chart_recommendation as { type?: string })?.type,
             res.data,
@@ -371,6 +503,14 @@ export default function App() {
     }
   };
 
+  const handleAdminChatSubmit = (queryText: string) => {
+    submitAdminChatQuery(queryText);
+  };
+
+  const handleAdminClarificationOption = (option: string) => {
+    submitAdminChatQuery(option);
+  };
+
   // Confirm & execute a previously proposed write (INSERT/UPDATE/DELETE)
   const handleConfirmWrite = async (messageId: string, token: string) => {
     const userId = authUser?.userId;
@@ -378,7 +518,12 @@ export default function App() {
 
     setIsChatLoading(true);
     try {
-      const res = await adminApi.confirm(token, userId, adminChatSessionId);
+      const currentSessionId = activeAdminSessionId || "admin-default-session";
+      const res = await adminApi.confirm(token, userId, currentSessionId);
+      // Extract target table name for follow-up suggestions
+      const targetTableMatch = res.refreshed_data?.question?.match(/Show all (\w+)/i);
+      const tableName = targetTableMatch ? targetTableMatch[1] : "products";
+
       setChatMessages((prev) =>
         prev.map((m) =>
           m.id === messageId
@@ -388,35 +533,18 @@ export default function App() {
                   ? { ...m.pendingConfirmation, resolved: "confirmed" as const }
                   : undefined,
                 status: "Success" as const,
+                text: `✅ ${m.pendingConfirmation?.operation.toUpperCase() || "Write"} operation executed successfully! ${res.affected_rows} row(s) affected.`,
                 message: `Query OK, ${res.affected_rows} row(s) affected.`,
                 resultPreview: res.data.length > 0 ? { columns: Object.keys(res.data[0]), rows: res.data } : undefined,
+                suggestedQuestions: [
+                  `Show all ${tableName}`,
+                  `Show breakdown of ${tableName}`,
+                  `Show total count of ${tableName}`
+                ],
               }
             : m
         )
       );
-
-      // Automatically append refreshed SELECT result message if present!
-      if (res.refreshed_data) {
-        const refreshedMsg: ChatMessage = {
-          id: `msg-${Date.now()}-refreshed`,
-          sender: "ai",
-          text: `Refreshed results reflecting the latest database state for: "${res.refreshed_data.question}"`,
-          timestamp: Date.now(),
-          status: "Success",
-          sql: res.refreshed_data.sql,
-          message: `Query OK, ${res.refreshed_data.data.length} row(s) returned.`,
-          resultPreview: res.refreshed_data.data.length > 0 
-            ? { columns: res.refreshed_data.columns, rows: res.refreshed_data.data } 
-            : undefined,
-          chartData: mapChartRecommendation(
-            res.refreshed_data.chart_type,
-            res.refreshed_data.data,
-            res.refreshed_data.columns,
-            SUPPORTED_CHART_TYPES
-          )
-        };
-        setChatMessages((prev) => [...prev, refreshedMsg]);
-      }
     } catch (err) {
       const message = err instanceof ApiError ? err.message : "Failed to confirm the write.";
       setChatMessages((prev) => [
@@ -435,17 +563,14 @@ export default function App() {
     }
   };
 
-  const handleAdminClarificationOption = (option: string) => {
-    setChatInput(option);
-  };
-
   const handleAdminCompare = async (questionText: string) => {
     const userId = authUser?.userId;
     if (!userId) return;
 
     setCompareState({ questionText, isLoading: true, result: null, error: null });
     try {
-      const result = await adminApi.askCompare(questionText, userId, adminChatSessionId);
+      const currentSessionId = activeAdminSessionId || "admin-default-session";
+      const result = await adminApi.askCompare(questionText, userId, currentSessionId);
       setCompareState({ questionText, isLoading: false, result, error: null });
     } catch {
       setCompareState({ questionText, isLoading: false, result: null, error: "Comparison failed. Please try again." });
@@ -458,7 +583,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen flex font-sans selection:bg-accent/20 selection:text-accent transition-colors duration-200 bg-bg text-text">
+    <div className="h-screen overflow-hidden flex font-sans selection:bg-accent/20 selection:text-accent bg-bg text-text">
       {/* TOAST NOTIFICATION CONTAINER */}
       {toastMessage && (
         <div className="fixed bottom-5 right-5 z-[100] bg-surface border border-accent/30 text-text px-5 py-3 rounded-2xl shadow-2xl flex items-center gap-3 animate-rise-in glass-panel">
@@ -473,7 +598,6 @@ export default function App() {
         setActiveTab={setActiveTab}
         sidebarCollapsed={sidebarCollapsed}
         setSidebarCollapsed={setSidebarCollapsed}
-        isTesting={isTesting}
       />
 
       {/* MAIN CONTAINER */}
@@ -483,7 +607,6 @@ export default function App() {
           theme={theme}
           setTheme={setTheme}
           activeTab={activeTab}
-          apiError={apiError}
           handleLogout={handleLogout}
         />
 
@@ -491,12 +614,10 @@ export default function App() {
         <section className="flex-1 overflow-y-auto p-6">
           {activeTab === "dashboard" && (
             <Dashboard
-              emptySystemState={emptySystemState}
-              handleResetData={handleResetData}
               dashboardStats={dashboardStats}
-              queryVolumeTrend={queryVolumeTrend}
+              queryVolumeTrend={queryVolume}
               accuracyHistory={accuracyHistory}
-              queryLogs={queryLogs}
+              queryLogs={realQueryLogs}
               managedUsers={managedUsers}
               setActiveTab={setActiveTab}
               setUserMgmtStatusFilter={setUserMgmtStatusFilter}
@@ -516,6 +637,7 @@ export default function App() {
               <QueryLogs
                 queryLogs={realQueryLogs}
                 setSelectedLog={setSelectedLog}
+                onRefreshLogs={loadQueryLogs}
               />
             )
           )}
@@ -561,12 +683,16 @@ export default function App() {
               chatMessages={chatMessages}
               setChatMessages={setChatMessages}
               isChatLoading={isChatLoading}
-              chatInput={chatInput}
-              setChatInput={setChatInput}
               handleAdminChatSubmit={handleAdminChatSubmit}
               handleConfirmWrite={handleConfirmWrite}
               handleClarificationOption={handleAdminClarificationOption}
               onCompare={handleAdminCompare}
+              adminSessions={adminSessions}
+              activeAdminSessionId={activeAdminSessionId}
+              onSelectAdminSession={setActiveAdminSessionId}
+              onCreateAdminSession={handleCreateAdminSession}
+              onDeleteAdminSession={handleDeleteAdminSession}
+              onRenameAdminSession={handleRenameAdminSession}
             />
           )}
 
@@ -583,17 +709,20 @@ export default function App() {
       <QueryInspectDrawer
         selectedLog={selectedLog}
         onClose={() => setSelectedLog(null)}
-        managedUsers={managedUsers}
       />
 
       {/* KPI DETAIL MODALS */}
       <KpiDetailsModal
         activeKpiModal={activeKpiModal}
         onClose={() => setActiveKpiModal(null)}
-        queryLogs={queryLogs}
-        managedUsers={managedUsers}
+        queryLogs={realQueryLogs}
         userActivities={userActivities}
-        benchmarkQuestions={benchmarkQuestions}
+        benchmarkQuestions={benchmarkEvalResults.map((r, i) => ({
+          id: String(i),
+          question: r.question,
+          expectedSql: "",
+          result: r.status === "correct" ? "Correct" : "Incorrect",
+        }))}
       />
 
       {/* Per-query model comparison modal */}

@@ -47,27 +47,27 @@ export const AnalyticsSummaryPanel: React.FC = () => {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <BarChart3 className="w-4 h-4 text-accent" />
-          <h3 className="text-sm font-bold text-white">Real Usage Analytics</h3>
+          <h3 className="text-sm font-bold text-text">Real Usage Analytics</h3>
         </div>
         <span className="text-[10px] text-text-muted font-mono">{summary.total_queries} total queries logged</span>
       </div>
       <p className="text-[11px] text-text-muted -mt-3">
-        Aggregated live from the <code className="text-text-muted">query_logs</code> table (every real question asked
-        through User Chat and Admin Chat) - distinct from the KPI cards above, which are a local demo simulation.
+        Aggregated live from the <code className="text-text-muted">query_logs</code> table - every real question asked
+        through User Chat and Admin Chat.
       </p>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-surface-2 border border-border rounded-lg p-3">
           <span className="text-[9px] uppercase font-bold text-success block">Success Rate</span>
-          <span className="text-lg font-extrabold text-white font-mono">{pct(summary.success_rate)}</span>
+          <span className="text-lg font-extrabold text-text font-mono">{pct(summary.success_rate)}</span>
         </div>
         <div className="bg-surface-2 border border-border rounded-lg p-3">
           <span className="text-[9px] uppercase font-bold text-danger block">Error Rate</span>
-          <span className="text-lg font-extrabold text-white font-mono">{pct(summary.error_rate)}</span>
+          <span className="text-lg font-extrabold text-text font-mono">{pct(summary.error_rate)}</span>
         </div>
         <div className="bg-surface-2 border border-border rounded-lg p-3">
           <span className="text-[9px] uppercase font-bold text-text-muted block">Avg Execution Time</span>
-          <span className="text-lg font-extrabold text-white font-mono">
+          <span className="text-lg font-extrabold text-text font-mono">
             {summary.avg_execution_time_ms.toFixed(0)}ms
           </span>
         </div>
@@ -87,7 +87,7 @@ export const AnalyticsSummaryPanel: React.FC = () => {
               key={s.status}
               className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-surface-2 border border-border text-text-muted"
             >
-              {s.status}: <span className="text-white">{s.count}</span>
+              {s.status}: <span className="text-text">{s.count}</span>
             </span>
           ))}
         </div>

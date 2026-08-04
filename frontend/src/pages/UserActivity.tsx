@@ -44,7 +44,7 @@ export const UserActivityPage: React.FC<UserActivityProps> = ({
                 >
                   <td className="py-4 px-5">
                     <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-[#1D3F3A] text-accent font-extrabold flex items-center justify-center shadow-md border border-accent/20 text-xs font-mono">
+                      <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-accent to-teal text-white font-extrabold flex items-center justify-center shadow-sm text-xs font-sans">
                         {user.name.charAt(0)}
                       </div>
                       <span className="font-bold text-text font-sans">
